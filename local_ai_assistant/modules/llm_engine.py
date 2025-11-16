@@ -1,0 +1,58 @@
+"""Simple wrapper around the local Ollama HTTP API."""
+from __future__ import annotations
+
+import logging
+from typing import Dict, Generator, Iterable
+
+import requests
+import simplejson as json
+
+import config
+from utils.logger import log
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _stream_ollama(prompt: str) -> Generator[Dict[str, str], None, None]:
+    """Stream chunks from the Ollama /api/generate endpoint."""
+    url = f"{config.OLLAMA_HOST.rstrip('/')}/api/generate"
+    payload = {"model": config.LLM_MODEL, "prompt": prompt, "stream": True}
+    with requests.post(url, json=payload, stream=True, timeout=90) as response:
+        response.raise_for_status()
+        for line in response.iter_lines():
+            if not line:
+                continue
+            data = json.loads(line)
+            yield data
+
+
+def stream_response(prompt: str) -> Generator[str, None, None]:
+    """Yield response text incrementally as it streams from Ollama."""
+    if not prompt:
+        return
+
+    try:
+        for packet in _stream_ollama(prompt):
+            chunk = packet.get("response", "")
+            if chunk:
+                yield chunk
+            if packet.get("done"):
+                break
+    except requests.exceptions.RequestException as exc:
+        error_msg = (
+            "LLM backend unreachable. Ensure Ollama is running locally and the model is pulled. "
+            f"Details: {exc}"
+        )
+        log(error_msg)
+        yield error_msg
+    except json.JSONDecodeError as exc:  # pragma: no cover
+        error_msg = f"Invalid response from Ollama. Details: {exc}"
+        log(error_msg)
+        yield error_msg
+
+
+def generate_response(prompt: str) -> str:
+    """Send a prompt to the local LLM and return the generated text."""
+    text = "".join(stream_response(prompt or ""))
+    text = text.strip()
+    return text or "(No response from model.)"

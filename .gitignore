@@ -1,0 +1,34 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.venv*/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Logs and runtime data
+local_ai_assistant/logs/
+local_ai_assistant/data/memory.json
+
+# Local models (downloaded at runtime)
+local_ai_assistant/models/
+!local_ai_assistant/models/README*
+
+# Editor / IDE metadata
+.vscode/
+.idea/
+*.code-workspace
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
