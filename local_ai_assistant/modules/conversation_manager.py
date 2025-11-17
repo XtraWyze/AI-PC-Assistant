@@ -33,8 +33,12 @@ def clear_context() -> None:
     _HISTORY.clear()
 
 
-def build_prompt_with_context(user_input: str, system_preamble: Optional[str] = None) -> str:
-    """Assemble a prompt with optional system preamble and recent turns."""
+def build_prompt_with_context(
+    user_input: str,
+    system_preamble: Optional[str] = None,
+    assistant_directive: Optional[str] = None,
+) -> str:
+    """Assemble a prompt with optional system preamble, history, and directives."""
     lines: List[str] = []
     if system_preamble:
         lines.append(system_preamble.strip())
@@ -45,5 +49,7 @@ def build_prompt_with_context(user_input: str, system_preamble: Optional[str] = 
         lines.append(f"{speaker}: {turn['text']}")
 
     lines.append(f"User: {user_input}")
+    if assistant_directive:
+        lines.append(f"System: {assistant_directive.strip()}")
     lines.append(f"{assistant_name}:")
     return "\n".join(lines)

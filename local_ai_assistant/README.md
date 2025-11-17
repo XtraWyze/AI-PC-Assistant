@@ -31,6 +31,18 @@ python assistant.py
 
 Press Enter to speak or type directly. Say "quit" or press `Ctrl+C` to exit.
 
+## Built-in local commands
+
+These run instantly without the LLM:
+
+- `scan apps` / `list apps` keeps the executable registry up to date.
+- `open <app>` or `launch <app>` starts any indexed application.
+- `close <app>` issues a Windows `taskkill` for the target process (falls back to `<name>.exe` if the app isn't indexed).
+- `open folder <path>` opens a directory in Explorer.
+- `open browser`, `open chrome`, `open notepad`, `take screenshot`, and `type: ...` provide quick PC controls.
+
+Set `MERGE_COMMAND_RESPONSES=False` in `config.py` if you prefer instant local acknowledgements instead of routing the action summary back through the LLM.
+
 ## Notes
 
 - Toggle `USE_STT`/`USE_TTS` in `config.py` to disable audio subsystems.

@@ -3,50 +3,48 @@ from __future__ import annotations
 
 import time
 from difflib import SequenceMatcher
+from typing import Optional
 
 import config
-from utils.logger import log
+from utils.logger import log as default_logger
 
 from . import stt_vosk
 
-_HOTWORD = config.HOTWORD.lower().strip()
 
-
-def _fuzzy_match(text: str, target: str, threshold: float = 0.75) -> bool:
+def _fuzzy_match(text: str, target: str, logger=default_logger, threshold: float = 0.75) -> bool:
     """Check if text fuzzy-matches target using similarity ratio."""
     text = text.lower().strip()
     target = target.lower().strip()
-    
-    # Exact match
+
+    if not text:
+        return False
+
     if target in text:
         return True
-    
-    # Check similarity ratio
+
     ratio = SequenceMatcher(None, text, target).ratio()
     if ratio >= threshold:
-        log(f"Fuzzy match: '{text}' ~= '{target}' (similarity: {ratio:.2f})")
+        logger(f"Fuzzy match: '{text}' ~= '{target}' ({ratio:.2f})")
         return True
-    
-    # Check if words in target appear in text (word-by-word)
+
     target_words = target.split()
     text_words = text.split()
-    
-    # Try to find all target words in the transcribed text
+
     for target_word in target_words:
         found = False
         for text_word in text_words:
             word_ratio = SequenceMatcher(None, text_word, target_word).ratio()
-            if word_ratio >= 0.7:  # Per-word threshold
+            if word_ratio >= 0.7:
                 found = True
                 break
         if not found:
             return False
-    
-    log(f"Word-by-word match: '{text}' matches '{target}'")
+
+    logger(f"Word-by-word match: '{text}' matched '{target}'")
     return True
 
 
-def _ensure_recognizer_ready() -> bool:
+def _ensure_recognizer_ready(logger=default_logger) -> bool:
     recognizer = getattr(stt_vosk, "_RECOGNIZER", None)
     if recognizer is not None:
         return True
@@ -54,35 +52,68 @@ def _ensure_recognizer_ready() -> bool:
         stt_vosk.init_recognizer()
         return True
     except Exception as exc:  # pragma: no cover - hardware specific
-        log(f"Unable to load Vosk recognizer for hotword detection: {exc}")
+        logger(f"Unable to load Vosk recognizer for hotword detection: {exc}")
         return False
 
 
-def listen_for_hotword(timeout_seconds: float | None = None) -> bool:
-    """Block until the configured hotword is detected or timeout expires."""
-    if not config.USE_STT:
-        log("Hotword detection skipped because STT is disabled in config.")
-        return False
-    if not _HOTWORD:
-        log("Hotword phrase not configured.")
-        return False
-    if not _ensure_recognizer_ready():
+def _normalize_phrase_list(items) -> list[str]:
+    phrases: list[str] = []
+    seen: set[str] = set()
+    for item in items or []:
+        text = str(item).strip().lower()
+        if not text or text in seen:
+            continue
+        phrases.append(text)
+        seen.add(text)
+    return phrases
+
+
+def _get_hotword_phrases(cfg) -> tuple[list[str], list[str]]:
+    primary = [getattr(cfg, "HOTWORD", "")] + list(getattr(cfg, "HOTWORD_ALIASES", []) or [])
+    visible = _normalize_phrase_list(primary)
+    hidden_candidates = _normalize_phrase_list(getattr(cfg, "HOTWORD_HIDDEN_ALIASES", []) or [])
+    hidden = [phrase for phrase in hidden_candidates if phrase not in visible]
+    return visible, hidden
+
+
+def listen_for_hotword(
+    config_module=None,
+    logger=default_logger,
+    timeout_seconds: Optional[float] = None,
+) -> bool:
+    """Continuously listen until the configured hotword is detected or timeout occurs."""
+    cfg = config_module or config
+    if not getattr(cfg, "USE_STT", False):
+        logger("Hotword detection skipped because STT is disabled in config.")
         return False
 
-    timeout = timeout_seconds if timeout_seconds is not None else config.HOTWORD_TIMEOUT_SECONDS
+    visible_phrases, hidden_phrases = _get_hotword_phrases(cfg)
+    phrases = visible_phrases + hidden_phrases
+    if not phrases:
+        logger("Hotword phrase not configured.")
+        return False
+
+    if not _ensure_recognizer_ready(logger=logger):
+        return False
+
+    timeout = timeout_seconds if timeout_seconds is not None else getattr(cfg, "HOTWORD_TIMEOUT_SECONDS", None)
     deadline = time.time() + timeout if timeout else None
 
-    log(f"Listening for hotword '{config.HOTWORD}'...")
+    if visible_phrases:
+        readable = ", ".join(f"'{phrase}'" for phrase in visible_phrases)
+        logger(f"Listening for hotword(s) {readable}...")
+    else:
+        logger("Listening for configured hotword(s)...")
     while True:
         if deadline and time.time() > deadline:
-            log("Hotword listen timed out.")
+            logger("Hotword listen timed out.")
             return False
-        # Listen in short bursts so the user can just say the wake-phrase.
+
         transcript = stt_vosk.listen_once(timeout_seconds=3.0)
         if transcript:
-            log(f"Heard: '{transcript}'")
-            if _fuzzy_match(transcript, _HOTWORD, threshold=0.65):
-                log("Hotword detected.")
-                return True
-        # Slight pause to avoid hammering the CPU when no audio is coming in.
+            logger(f"Heard: '{transcript}'")
+            for phrase in phrases:
+                if _fuzzy_match(transcript, phrase, logger=logger, threshold=0.65):
+                    logger(f"Hotword detected ({phrase}).")
+                    return True
         time.sleep(0.1)

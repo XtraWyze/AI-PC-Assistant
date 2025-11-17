@@ -192,7 +192,11 @@ def _capture_voice_input() -> str:
         return ""
 
     if config.ENABLE_HOTWORD:
-        detected = hotword_detector.listen_for_hotword()
+        detected = hotword_detector.listen_for_hotword(
+            config_module=config,
+            logger=log,
+            timeout_seconds=getattr(config, "HOTWORD_TIMEOUT_SECONDS", None),
+        )
         if not detected:
             return ""
         _speak_text("I'm listening.")
@@ -413,28 +417,40 @@ def _deliver_text_reply(text: str) -> None:
     _speak_text(text)
 
 
-def _process_user_query(user_text: str) -> None:
+def _process_user_query(user_text: str, command_feedback: Optional[str] = None) -> None:
     memory_manager.add_history_entry(user_text)
     memory_manager.set_fact("last_query", user_text)
+    memory_manager.add_conversation_turn("user", user_text)
     conversation_manager.add_turn("user", user_text)
 
-    if config.ENABLE_COMMANDS and commands_toolkit.is_command(user_text):
-        result = commands_toolkit.handle_command(user_text, memory=memory_manager, logger=log)
-        conversation_manager.add_turn("assistant", result)
-        _deliver_text_reply(result)
-        return
+    directive = None
+    if command_feedback:
+        directive = (
+            "A trusted local automation command already executed in response to the latest user request. "
+            f"Command result: {command_feedback}. In your reply, briefly acknowledge the action and continue "
+            "helping the user without mentioning any separate subsystems."
+        )
 
     prompt = conversation_manager.build_prompt_with_context(
         user_text,
         system_preamble=getattr(config, "SYSTEM_PREAMBLE", None),
+        assistant_directive=directive,
     )
     reply = stream_llm_reply(prompt)
     conversation_manager.add_turn("assistant", reply)
+    memory_manager.add_conversation_turn("assistant", reply)
+
+
+def _hydrate_saved_conversation() -> None:
+    limit = max(1, getattr(config, "MAX_CONTEXT_TURNS", 6) * 2)
+    for turn in memory_manager.get_recent_turns(limit=limit):
+        conversation_manager.add_turn(turn.get("role", ""), turn.get("text", ""))
 
 
 def main() -> None:
     initialize_subsystems()
     print_startup_banner()
+    _hydrate_saved_conversation()
     
     # Start keyboard listener for interrupts
     listener = keyboard.Listener(on_press=_on_key_press)
@@ -442,14 +458,25 @@ def main() -> None:
 
     while True:
         try:
-            user_text = _get_user_input().strip()
-            if not user_text:
+            user_text = _get_user_input()
+            cleaned = user_text.strip()
+            if not cleaned:
                 continue
-            if user_text.lower() in {"quit", "exit"}:
+            lower_text = cleaned.lower()
+            if lower_text in {"quit", "exit"}:
                 log("Exiting on user request.")
                 return
-            print(f"{Fore.CYAN}You:{Style.RESET_ALL} {user_text}")
-            _process_user_query(user_text)
+            print(f"{Fore.CYAN}You:{Style.RESET_ALL} {cleaned}")
+            if config.ENABLE_COMMANDS and commands_toolkit.is_command(cleaned):
+                reply = commands_toolkit.handle_command(cleaned, log)
+                if getattr(config, "MERGE_COMMAND_RESPONSES", False):
+                    _process_user_query(cleaned, command_feedback=reply)
+                else:
+                    print(f"{config.ASSISTANT_NAME}: {reply}")
+                    if config.USE_TTS:
+                        tts_engine.speak(reply)
+                continue
+            _process_user_query(cleaned)
         except KeyboardInterrupt:
             print("\n")
             log("Keyboard interrupt received. Goodbye!")

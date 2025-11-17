@@ -12,9 +12,12 @@ MODE = "voice"  # "voice" for hotword+STT loop, "text" for console input.
 ENABLE_HOTWORD = True  # Disable to fall back to push-to-talk for voice mode.
 HOTWORD = "hey wyzer"  # Phrase the hotword detector should listen for.
 HOTWORD_TIMEOUT_SECONDS = 45.0  # Stop waiting for a wake word after this many seconds (None = unlimited).
+HOTWORD_ALIASES = ["wyzer"]  # Additional phrases treated as wake words.
+HOTWORD_HIDDEN_ALIASES = ["wiser", "hey wiser"]  # Extra wake phrases kept out of console logs.
 ENABLE_PUSH_TO_TALK = False  # Optional fallback while hotword is disabled/unavailable.
 PUSH_TO_TALK_PROMPT = "Press ENTER and speak..."  # Shown in console for text fallback prompting.
-ENABLE_COMMANDS = True  # Route built-in commands locally instead of sending to the LLM.
+ENABLE_COMMANDS = True  # Route built-in PC-control commands locally instead of sending to the LLM.
+MERGE_COMMAND_RESPONSES = False  # Keep local command replies short by skipping the LLM follow-up.
 MAX_CONTEXT_TURNS = 6  # How many historical turns (user+assistant pairs) feed into the LLM prompt.
 SYSTEM_PREAMBLE = (
     "You are a helpful, privacy-preserving local assistant called Wyzer. "
@@ -56,6 +59,12 @@ TTS_VOICE = "en_US"  # Used primarily by pyttsx3 backends.
 COQUI_TTS_MODEL = "tts_models/en/jenny/jenny"
 COQUI_TTS_SPEAKER = None  # Example: "p269" for multi-speaker models.
 COQUI_TTS_LANGUAGE = "en"
+
+# ---------------------------------------------------------------------------
+# Local PC control / automation commands
+# ---------------------------------------------------------------------------
+COMMAND_BROWSER_HOME = "https://github.com"  # Homepage opened for browser-related commands.
+SCREENSHOT_DIR = "screenshots"  # Relative folder (under repo root) for saved screenshots.
 
 # ---------------------------------------------------------------------------
 # Memory persistence
