@@ -19,6 +19,7 @@ from modules import (
     memory_manager,
     stt_vosk,
     tts_engine,
+    web_search,
 )
 from utils.logger import log
 
@@ -223,6 +224,12 @@ def _get_user_input() -> str:
 
 
 _SENTENCE_PATTERN = re.compile(r"(?<=[.!?\n])")
+_WEB_SEARCH_PREFIXES = ("search ", "google ", "look up ", "web:")
+_WEB_SEARCH_FAILURE_DIRECTIVE = (
+    "Web search was requested but unavailable. Begin your reply with "
+    '"I couldn\'t reach the internet, but here\'s what I know offline:" and '
+    "answer using only existing knowledge."
+)
 
 
 def _extract_complete_segments(buffer: str) -> Tuple[List[str], str]:
@@ -417,19 +424,68 @@ def _deliver_text_reply(text: str) -> None:
     _speak_text(text)
 
 
-def _process_user_query(user_text: str, command_feedback: Optional[str] = None) -> None:
+def _extract_web_query(user_text: str) -> str:
+    """Return the stripped query once a search trigger is detected."""
+    lower = user_text.lower()
+    for prefix in _WEB_SEARCH_PREFIXES:
+        if lower.startswith(prefix):
+            return user_text[len(prefix) :].strip()
+    return ""
+
+
+def handle_web_search(user_text: str, cfg, *, query: Optional[str] = None) -> Optional[str]:
+    """Return an assistant directive that injects web search findings."""
+    actual_query = (query or _extract_web_query(user_text)).strip()
+    if not actual_query:
+        log("handle_web_search called without a valid query.")
+        return None
+
+    log(f"Searching the web for: {actual_query}")
+    results = web_search.web_search(actual_query, num_results=getattr(cfg, "SEARCH_MAX_RESULTS", 5))
+    if not results:
+        return None
+
+    formatted_chunks: List[str] = []
+    for idx, item in enumerate(results, start=1):
+        title = (item.get("title") or "Untitled").strip()
+        url = (item.get("url") or "Unknown URL").strip()
+        snippet = (item.get("snippet") or "").replace("\n", " ").strip()
+        if len(snippet) > 320:
+            snippet = f"{snippet[:317]}..."
+        formatted_chunks.append(f"{idx}. {title}\nURL: {url}\nSnippet: {snippet}")
+
+    formatted_results = "\n\n".join(formatted_chunks)
+    directive = (
+        "Web search results for the latest user request are available. Use only these snippets as your source.\n"
+        f"Query: {actual_query}\n"
+        "Here are the hits (title, URL, snippet):\n"
+        f"{formatted_results}\n"
+        "Provide a concise answer in plain language, cite the top two or three URLs, and acknowledge uncertainty if the snippets are insufficient."
+    )
+    return directive
+
+
+def _process_user_query(
+    user_text: str,
+    command_feedback: Optional[str] = None,
+    *,
+    assistant_directive_override: Optional[str] = None,
+) -> None:
     memory_manager.add_history_entry(user_text)
     memory_manager.set_fact("last_query", user_text)
     memory_manager.add_conversation_turn("user", user_text)
     conversation_manager.add_turn("user", user_text)
 
-    directive = None
+    directive_parts: List[str] = []
     if command_feedback:
-        directive = (
+        directive_parts.append(
             "A trusted local automation command already executed in response to the latest user request. "
             f"Command result: {command_feedback}. In your reply, briefly acknowledge the action and continue "
             "helping the user without mentioning any separate subsystems."
         )
+    if assistant_directive_override:
+        directive_parts.append(assistant_directive_override)
+    directive = " ".join(directive_parts) if directive_parts else None
 
     prompt = conversation_manager.build_prompt_with_context(
         user_text,
@@ -475,6 +531,29 @@ def main() -> None:
                     print(f"{config.ASSISTANT_NAME}: {reply}")
                     if config.USE_TTS:
                         tts_engine.speak(reply)
+                continue
+
+            search_query = _extract_web_query(cleaned)
+            if search_query:
+                if config.USE_WEB_SEARCH:
+                    directive = handle_web_search(cleaned, config, query=search_query)
+                    if directive:
+                        _process_user_query(
+                            cleaned,
+                            assistant_directive_override=directive,
+                        )
+                        continue
+                    log("Web search failed; falling back to offline answer.")
+                    _process_user_query(
+                        cleaned,
+                        assistant_directive_override=_WEB_SEARCH_FAILURE_DIRECTIVE,
+                    )
+                    continue
+                log("Web search request received but USE_WEB_SEARCH=False.")
+                _process_user_query(
+                    cleaned,
+                    assistant_directive_override=_WEB_SEARCH_FAILURE_DIRECTIVE,
+                )
                 continue
             _process_user_query(cleaned)
         except KeyboardInterrupt:

@@ -43,6 +43,12 @@ These run instantly without the LLM:
 
 Set `MERGE_COMMAND_RESPONSES=False` in `config.py` if you prefer instant local acknowledgements instead of routing the action summary back through the LLM.
 
+## Web search integration
+
+- Flip `USE_WEB_SEARCH` in `config.py` to enable/disable live lookups. When on, phrases such as `search climate stats` or `web: new python release` fetch DuckDuckGo HTML results and summarize them through the local Ollama model.
+- Tweak `SEARCH_PROVIDER`, `SEARCH_BASE_URL`, `SEARCH_MAX_RESULTS`, and `SEARCH_TIMEOUT_SECONDS` to point at an alternate provider or self-hosted proxy.
+- Dependencies: `requests` (already required) plus `beautifulsoup4` for lightweight HTML parsing. Install via `pip install -r requirements.txt` after pulling the latest repo state.
+
 ## Notes
 
 - Toggle `USE_STT`/`USE_TTS` in `config.py` to disable audio subsystems.

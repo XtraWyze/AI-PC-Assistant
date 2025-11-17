@@ -8,4 +8,5 @@ __all__ = [
     "conversation_manager",
     "commands_toolkit",
     "hotword_detector",
+    "web_search",
 ]

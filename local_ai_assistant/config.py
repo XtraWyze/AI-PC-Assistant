@@ -25,6 +25,15 @@ SYSTEM_PREAMBLE = (
 )
 
 # ---------------------------------------------------------------------------
+# Optional web search integration
+# ---------------------------------------------------------------------------
+USE_WEB_SEARCH = True  # Allow the assistant to fetch live snippets when explicitly requested.
+SEARCH_PROVIDER = "duckduckgo"  # Currently supported: "duckduckgo".
+SEARCH_BASE_URL = "https://duckduckgo.com/html/"  # Override if you host a custom endpoint.
+SEARCH_MAX_RESULTS = 5  # Number of snippets to feed into the LLM summarizer.
+SEARCH_TIMEOUT_SECONDS = 8  # Keep remote calls short to avoid blocking the loop.
+
+# ---------------------------------------------------------------------------
 # LLM backend (Ollama) configuration
 # ---------------------------------------------------------------------------
 LLM_MODEL = "llama3"  # Name of an Ollama model that is already pulled locally.

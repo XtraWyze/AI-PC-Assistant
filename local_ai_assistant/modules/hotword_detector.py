@@ -1,6 +1,7 @@
 """Simple hotword detection built on the existing Vosk STT stack."""
 from __future__ import annotations
 
+import threading
 import time
 from difflib import SequenceMatcher
 from typing import Optional
@@ -80,6 +81,8 @@ def listen_for_hotword(
     config_module=None,
     logger=default_logger,
     timeout_seconds: Optional[float] = None,
+    stop_event: Optional[threading.Event] = None,
+    poll_interval: float = 0.1,
 ) -> bool:
     """Continuously listen until the configured hotword is detected or timeout occurs."""
     cfg = config_module or config
@@ -104,16 +107,27 @@ def listen_for_hotword(
         logger(f"Listening for hotword(s) {readable}...")
     else:
         logger("Listening for configured hotword(s)...")
+    poll_interval = max(0.05, float(poll_interval))
+
     while True:
+        if stop_event and stop_event.is_set():
+            logger("Hotword listener stopped by request.")
+            return False
         if deadline and time.time() > deadline:
             logger("Hotword listen timed out.")
             return False
 
         transcript = stt_vosk.listen_once(timeout_seconds=3.0)
+        if stop_event and stop_event.is_set():
+            return False
         if transcript:
             logger(f"Heard: '{transcript}'")
             for phrase in phrases:
                 if _fuzzy_match(transcript, phrase, logger=logger, threshold=0.65):
                     logger(f"Hotword detected ({phrase}).")
                     return True
-        time.sleep(0.1)
+        if stop_event:
+            if stop_event.wait(poll_interval):
+                return False
+        else:
+            time.sleep(poll_interval)
