@@ -11,11 +11,12 @@ import time
 import webbrowser
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Optional
 
 import config
 from utils.logger import log as default_logger
 
-from . import app_registry, file_indexer, file_search
+from . import app_registry, audio_control, file_indexer, file_search
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FALLBACK_HOMEPAGE = "https://github.com"
@@ -62,6 +63,166 @@ _MEDIA_COMMANDS: list[tuple[str, int, str]] = [
 _FOLDER_PATTERN = re.compile(r"open\s+folder\s+(.+)", re.IGNORECASE)
 _TYPE_PATTERN = re.compile(r"type\s*:\s*(.+)", re.IGNORECASE)
 
+_SET_VOLUME_PATTERNS: tuple[tuple[re.Pattern[str], bool], ...] = (
+    (
+        re.compile(
+            r"set\s+(?:the\s+)?(?P<app>[\w\s]+?)\s+volume\s+to\s+(?P<value>\d+(?:\.\d+)?)\s*(?:percent|%)?",
+            re.IGNORECASE,
+        ),
+        False,
+    ),
+    (
+        re.compile(
+            r"set\s+volume\s+of\s+(?:the\s+)?(?P<app>[\w\s]+?)\s+to\s+(?P<value>\d+(?:\.\d+)?)\s*(?:percent|%)?",
+            re.IGNORECASE,
+        ),
+        False,
+    ),
+    (
+        re.compile(
+            r"set\s+(?:the\s+)?(?P<app>[\w\s]+?)\s+to\s+(?P<value>\d+(?:\.\d+)?)\s*(?:percent|%)?",
+            re.IGNORECASE,
+        ),
+        True,
+    ),
+)
+
+_DELTA_VOLUME_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"(?P<verb>lower|decrease|reduce)\s+(?:the\s+)?(?P<app>[\w\s]+?)(?:\s+volume)?\s+by\s+(?P<value>\d+(?:\.\d+)?)\s*(?:percent|%)?",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?P<verb>raise|increase|boost)\s+(?:the\s+)?(?P<app>[\w\s]+?)(?:\s+volume)?\s+by\s+(?P<value>\d+(?:\.\d+)?)\s*(?:percent|%)?",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"turn\s+(?:the\s+)?(?P<app>[\w\s]+?)(?:\s+volume)?\s+(?P<direction>up|down)(?:\s+by\s+(?P<value>\d+(?:\.\d+)?)\s*(?:percent|%)?)?",
+        re.IGNORECASE,
+    ),
+)
+
+_UNMUTE_PATTERN = re.compile(r"\bunmute\s+(?:the\s+)?(?P<app>[\w\s]+)", re.IGNORECASE)
+_MUTE_PATTERN = re.compile(r"\bmute\s+(?:the\s+)?(?P<app>[\w\s]+)", re.IGNORECASE)
+_FILLER_TOKENS = {"the", "a", "an", "app", "application", "volume", "audio", "sound", "percent", "please", "thanks", "thank", "you"}
+_DEFAULT_VOLUME_DELTA = 5.0
+
+
+def _contains_percent_marker(text: str, normalized: str) -> bool:
+    return "percent" in normalized or "%" in text
+
+
+def _sanitize_app_name(raw: str) -> str:
+    candidate = raw.replace("%", " ").strip().strip(" .,!?:;")
+    if not candidate:
+        return ""
+    tokens = [token for token in re.split(r"\s+", candidate) if token.lower() not in _FILLER_TOKENS]
+    cleaned = " ".join(tokens).strip().strip(" .,!?:;")
+    return cleaned
+
+
+def _format_app_label(app_name: str) -> str:
+    if not app_name:
+        return "that app"
+    if len(app_name) <= 3:
+        return app_name.upper()
+    return app_name.title()
+
+
+def _direction_is_negative(word: str) -> bool:
+    lowered = word.lower()
+    return lowered in {"lower", "decrease", "reduce", "down"}
+
+
+def _parse_volume_command(text: str) -> Optional[dict[str, Any]]:
+    normalized = _normalize(text)
+    if not normalized:
+        return None
+    percent_marker = _contains_percent_marker(text, normalized)
+
+    for pattern, requires_percent in _SET_VOLUME_PATTERNS:
+        match = pattern.search(text)
+        if not match:
+            continue
+        if requires_percent and not percent_marker:
+            continue
+        app = _sanitize_app_name(match.group("app"))
+        if not app:
+            continue
+        try:
+            value = float(match.group("value"))
+        except (TypeError, ValueError):
+            continue
+        return {"type": "set", "app": app, "value": value}
+
+    for pattern in _DELTA_VOLUME_PATTERNS:
+        match = pattern.search(text)
+        if not match:
+            continue
+        app = _sanitize_app_name(match.group("app"))
+        if not app:
+            continue
+        value_str = match.groupdict().get("value")
+        try:
+            delta = float(value_str) if value_str else _DEFAULT_VOLUME_DELTA
+        except (TypeError, ValueError):
+            delta = _DEFAULT_VOLUME_DELTA
+        direction_word = match.groupdict().get("direction") or match.groupdict().get("verb") or ""
+        if _direction_is_negative(direction_word or ""):
+            delta = -abs(delta)
+        else:
+            delta = abs(delta)
+        return {"type": "delta", "app": app, "value": delta}
+
+    for pattern, mute_flag in ((_UNMUTE_PATTERN, False), (_MUTE_PATTERN, True)):
+        match = pattern.search(text)
+        if not match:
+            continue
+        app = _sanitize_app_name(match.group("app"))
+        if not app:
+            continue
+        return {"type": "mute", "app": app, "mute": mute_flag}
+
+    return None
+
+
+def _execute_volume_command(command: dict[str, Any], logger=default_logger) -> str:
+    app_query = (command.get("app") or "").strip()
+    if not app_query:
+        return "Please tell me which app to control."
+    app_label = _format_app_label(app_query)
+    cmd_type = command.get("type")
+
+    if cmd_type == "set":
+        target_value = max(0.0, min(100.0, float(command.get("value", 0.0))))
+        logger(f"Setting volume for {app_query} to {target_value:.1f}%")
+        success = audio_control.set_app_volume(app_query, target_value)
+        if success:
+            return f"Set {app_label} volume to {target_value:.0f} percent."
+        return f"I couldn't find an audio session for {app_label}."
+
+    if cmd_type == "delta":
+        delta_value = float(command.get("value", 0.0))
+        if delta_value == 0:
+            return f"Please provide how much to change {app_label}'s volume."
+        direction = "down" if delta_value < 0 else "up"
+        logger(f"Changing volume for {app_query} by {delta_value:.1f}%")
+        success = audio_control.change_app_volume(app_query, delta_value)
+        if success:
+            return f"Turned {app_label} volume {direction} by {abs(delta_value):.0f} percent."
+        return f"I couldn't find an audio session for {app_label}."
+
+    if cmd_type == "mute":
+        mute_flag = bool(command.get("mute", True))
+        logger(f"Setting mute={mute_flag} for {app_query}")
+        success = audio_control.mute_app(app_query, mute=mute_flag)
+        if success:
+            action = "Muted" if mute_flag else "Unmuted"
+            return f"{action} {app_label}."
+        return f"I couldn't find an audio session for {app_label}."
+
+    return "Sorry, I couldn't parse that volume request."
+
 def _extract_search_query(text: str) -> str:
     normalized = text.lower()
     for prefix in _FILE_SEARCH_PREFIXES:
@@ -99,6 +260,8 @@ def is_command(text: str) -> bool:
     if not text:
         return False
     normalized = _normalize(text)
+    if _parse_volume_command(text):
+        return True
     if normalized in _SCAN_COMMANDS or normalized in _LIST_COMMANDS:
         return True
     if normalized in {"open browser", "open chrome", "open notepad", "take screenshot"}:
@@ -126,6 +289,9 @@ def handle_command(text: str, logger=default_logger) -> str:
     logger(f"Handling local command: {text}")
 
     try:
+        volume_command = _parse_volume_command(cleaned)
+        if volume_command:
+            return _execute_volume_command(volume_command, logger=logger)
         media_match = _match_media_command(normalized)
         if media_match:
             keycode, message = media_match
