@@ -1,3 +1,4 @@
+# Core, fully offline dependencies
 colorama>=0.4.6
 requests>=2.31.0
 simplejson>=3.19.2
@@ -5,3 +6,4 @@ sounddevice>=0.4.6
 vosk>=0.3.45
 TTS>=0.22.0
 pyttsx3>=2.90
+pynput>=1.7.6

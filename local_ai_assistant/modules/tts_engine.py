@@ -23,6 +23,7 @@ _COQUI_SPEAKER: Optional[str] = None
 _COQUI_LANGUAGES: Optional[list[str]] = None
 _LANGUAGE_WARNING_EMITTED = False
 _PYTTSX_ENGINE: Any = None
+_stop_playback = False  # Flag to interrupt audio playback
 
 
 def init_tts() -> None:
@@ -138,5 +139,26 @@ def synthesize_audio(text: str) -> Tuple[Any, int]:
 
 def play_audio(audio: Any, sample_rate: int) -> None:
     """Play a numpy audio buffer and wait for completion."""
+    global _stop_playback
+    _stop_playback = False
     sd.play(audio, samplerate=sample_rate)
-    sd.wait()
+    
+    # Wait in short intervals so we can check stop flag
+    import time
+    while not _stop_playback:
+        if not sd.get_stream().active:
+            break
+        time.sleep(0.05)  # Check every 50ms
+    
+    if _stop_playback:
+        sd.stop()
+
+
+def stop_audio() -> None:
+    """Stop any currently playing audio."""
+    global _stop_playback
+    _stop_playback = True
+    try:
+        sd.stop()
+    except Exception:
+        pass

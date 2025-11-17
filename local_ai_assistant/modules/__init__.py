@@ -5,4 +5,7 @@ __all__ = [
     "stt_vosk",
     "tts_engine",
     "memory_manager",
+    "conversation_manager",
+    "commands_toolkit",
+    "hotword_detector",
 ]

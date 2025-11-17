@@ -1,30 +1,64 @@
 """Centralized configuration for the local AI assistant.
-Update the values below to point at your preferred models and devices.
+
+Everything intentionally stays local/offline. Update the values below to point at
+your preferred models, devices, and runtime defaults.
 """
 
-# Name of the Ollama model to run. Change this to any local model you have pulled.
-LLM_MODEL = "llama3"
+# ---------------------------------------------------------------------------
+# Identity & behavior toggles
+# ---------------------------------------------------------------------------
+ASSISTANT_NAME = "Wyzer"  # Display name + how the assistant introduces itself.
+MODE = "voice"  # "voice" for hotword+STT loop, "text" for console input.
+ENABLE_HOTWORD = True  # Disable to fall back to push-to-talk for voice mode.
+HOTWORD = "hey wyzer"  # Phrase the hotword detector should listen for.
+HOTWORD_TIMEOUT_SECONDS = 45.0  # Stop waiting for a wake word after this many seconds (None = unlimited).
+ENABLE_PUSH_TO_TALK = False  # Optional fallback while hotword is disabled/unavailable.
+PUSH_TO_TALK_PROMPT = "Press ENTER and speak..."  # Shown in console for text fallback prompting.
+ENABLE_COMMANDS = True  # Route built-in commands locally instead of sending to the LLM.
+MAX_CONTEXT_TURNS = 6  # How many historical turns (user+assistant pairs) feed into the LLM prompt.
+SYSTEM_PREAMBLE = (
+    "You are a helpful, privacy-preserving local assistant called Wyzer. "
+    "You run entirely offline and never make network requests."
+)
 
-# Where your Ollama daemon is listening. Stay on localhost to keep things offline.
-OLLAMA_HOST = "http://localhost:11434"
+# ---------------------------------------------------------------------------
+# LLM backend (Ollama) configuration
+# ---------------------------------------------------------------------------
+LLM_MODEL = "llama3"  # Name of an Ollama model that is already pulled locally.
+OLLAMA_HOST = "http://localhost:11434"  # Where the Ollama daemon is listening.
 
-# Feature toggles for optional subsystems.
-USE_TTS = True
-USE_STT = True
+# ---------------------------------------------------------------------------
+# Speech subsystems (still optional if you want text-only usage)
+# ---------------------------------------------------------------------------
+USE_TTS = True  # Enable Text-To-Speech responses.
+USE_STT = True  # Enable speech recognition via Vosk.
+VOSK_MODEL_PATH = "models/vosk_model"  # Folder containing the downloaded Vosk model.
+MAX_LISTEN_SECONDS = 10.0  # How long to listen after the user starts speaking.
 
-# Filesystem paths for local models. Place your downloaded Vosk model under this folder.
-VOSK_MODEL_PATH = "models/vosk_model"
+# Audio device overrides. Leave as None to allow sounddevice to auto-select defaults.
+VOICE_DEVICE_INDEX = None  # Playback device index for TTS audio.
+MIC_DEVICE_INDEX = None  # Recording device index for STT input.
 
-# Audio device overrides. Leave as None to let the libraries auto-select defaults.
-VOICE_DEVICE_INDEX = None
-MIC_DEVICE_INDEX = None
+# Voice interruption (say "stop" to cut off TTS playback)
+ENABLE_VOICE_INTERRUPTS = True  # Requires USE_STT plus Vosk assets.
+VOICE_INTERRUPT_PHRASES = [
+    "stop",
+    "cancel",
+    "nevermind",
+    "pause",
+    "quiet",
+]
 
-# Timeout controls for listening / speaking operations.
-MAX_LISTEN_SECONDS = 10.0
-TTS_VOICE = "en_US"  # Depends on the TTS backend in use.
-
-# Coqui TTS options. Set COQUI_TTS_SPEAKER for multi-speaker models, or
-# change COQUI_TTS_MODEL to a single-speaker variant such as "tts_models/en/jenny/jenny".
+# ---------------------------------------------------------------------------
+# TTS fine-tuning (Coqui preferred with pyttsx3 fallback)
+# ---------------------------------------------------------------------------
+TTS_VOICE = "en_US"  # Used primarily by pyttsx3 backends.
 COQUI_TTS_MODEL = "tts_models/en/jenny/jenny"
-COQUI_TTS_SPEAKER = None  # Example: "p269" for VCTK voices.
+COQUI_TTS_SPEAKER = None  # Example: "p269" for multi-speaker models.
 COQUI_TTS_LANGUAGE = "en"
+
+# ---------------------------------------------------------------------------
+# Memory persistence
+# ---------------------------------------------------------------------------
+MEMORY_FILE = "data/memory.json"  # Overridable path for the JSON memory store.
+MAX_HISTORY_ENTRIES = 100  # Prevent unbounded growth of on-disk history.

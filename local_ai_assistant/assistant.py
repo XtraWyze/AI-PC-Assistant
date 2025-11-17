@@ -1,4 +1,4 @@
-"""Main entry point for the local voice assistant loop."""
+"""Main entry point for the local AI assistant loop."""
 from __future__ import annotations
 
 import queue
@@ -8,13 +8,127 @@ import threading
 from typing import Any, List, Optional, Tuple
 
 from colorama import Fore, Style, init as colorama_init
+from pynput import keyboard
 
 import config
-from modules import llm_engine, memory_manager, stt_vosk, tts_engine
+from modules import (
+    commands_toolkit,
+    conversation_manager,
+    hotword_detector,
+    llm_engine,
+    memory_manager,
+    stt_vosk,
+    tts_engine,
+)
 from utils.logger import log
 
 
 colorama_init()
+
+# Global interrupt flag
+_interrupt_requested = threading.Event()
+_interrupt_key = config.INTERRUPT_KEY if hasattr(config, 'INTERRUPT_KEY') else 'esc'
+_voice_listener_running = False
+_voice_listener_thread: Optional[threading.Thread] = None
+_voice_listener_stop_event: Optional[threading.Event] = None
+
+
+def _voice_interrupt_listener(stop_event: threading.Event) -> None:
+    """Background thread that listens for voice interrupt commands."""
+    global _voice_listener_running
+
+    if not getattr(config, "ENABLE_VOICE_INTERRUPTS", False):
+        _voice_listener_running = False
+        return
+    if not config.USE_STT:
+        log("Voice interrupts require USE_STT=True. Ignoring request.")
+        _voice_listener_running = False
+        return
+
+    phrases = getattr(config, "VOICE_INTERRUPT_PHRASES", [])
+    if not phrases:
+        log("Voice interrupts enabled but no phrases configured. Disabling listener.")
+        _voice_listener_running = False
+        return
+
+    try:
+        detector = stt_vosk.VoiceInterruptDetector(phrases)
+    except Exception as exc:
+        log(f"Unable to initialize voice interrupt detector: {exc}")
+        _voice_listener_running = False
+        return
+
+    log("Voice interrupt listener running. Say 'stop' to cut off playback.")
+
+    try:
+        try:
+            detected = detector.listen_continuous(stop_event=stop_event)
+        except Exception as exc:  # pragma: no cover - audio hardware
+            log(f"Voice interrupt listener error: {exc}")
+            detected = False
+
+        if detected and not _interrupt_requested.is_set():
+            log("Voice interrupt detected.")
+            _interrupt_requested.set()
+            try:
+                tts_engine.stop_audio()
+            except Exception:
+                pass
+    finally:
+        detector.close()
+        _voice_listener_running = False
+
+
+def _start_voice_interrupt_listener() -> None:
+    """Start the voice interrupt listener thread."""
+    global _voice_listener_running, _voice_listener_thread, _voice_listener_stop_event
+
+    if _voice_listener_running:
+        return
+
+    if not getattr(config, "ENABLE_VOICE_INTERRUPTS", False):
+        return
+
+    if not config.USE_STT:
+        return
+
+    if not getattr(config, "VOICE_INTERRUPT_PHRASES", None):
+        return
+
+    _voice_listener_stop_event = threading.Event()
+    _voice_listener_running = True
+    _voice_listener_thread = threading.Thread(
+        target=_voice_interrupt_listener,
+        args=(_voice_listener_stop_event,),
+        daemon=True,
+    )
+    _voice_listener_thread.start()
+
+
+def _stop_voice_interrupt_listener() -> None:
+    """Stop the voice interrupt listener thread."""
+    global _voice_listener_running, _voice_listener_thread, _voice_listener_stop_event
+    _voice_listener_running = False
+    if _voice_listener_stop_event:
+        _voice_listener_stop_event.set()
+    if _voice_listener_thread and _voice_listener_thread.is_alive():
+        _voice_listener_thread.join(timeout=1.0)
+    _voice_listener_thread = None
+    _voice_listener_stop_event = None
+
+
+def _on_key_press(key):
+    """Handle key press events for interrupt."""
+    try:
+        # Check for ESC key or configured interrupt key
+        if key == keyboard.Key.esc:
+            _interrupt_requested.set()
+            return
+        # Check for specific character keys
+        if hasattr(key, 'char') and key.char and key.char.lower() == _interrupt_key.lower():
+            _interrupt_requested.set()
+    except AttributeError:
+        pass
 
 
 def initialize_subsystems() -> None:
@@ -35,21 +149,73 @@ def initialize_subsystems() -> None:
             log("Continuing without speech output. Set USE_TTS=False to silence this warning.")
 
 
-def capture_user_input() -> str:
-    """Prompt for typed or spoken input."""
-    user_entry = input("Press ENTER to speak, or type 'quit' to exit: ").strip()
-    if user_entry:
-        return user_entry
+def print_startup_banner() -> None:
+    mode = config.MODE.lower()
+    log(
+        "Starting %s in %s mode (hotword=%s, commands=%s)."
+        % (
+            config.ASSISTANT_NAME,
+            mode,
+            "on" if config.ENABLE_HOTWORD else "off",
+            "on" if config.ENABLE_COMMANDS else "off",
+        )
+    )
+    if mode == "voice" and config.ENABLE_HOTWORD:
+        log(f"Say '{config.HOTWORD}' to wake the assistant.")
+    elif mode == "voice" and config.ENABLE_PUSH_TO_TALK:
+        log("Voice mode fallback: press ENTER to talk when prompted.")
+    
+    log(f"Press ESC to interrupt the assistant.")
+    log("Type 'quit' or 'exit' at any time to stop.")
+
+
+def _speak_text(text: str) -> None:
+    if not text or not config.USE_TTS:
+        return
+    try:
+        tts_engine.speak(text)
+    except Exception as exc:  # pragma: no cover - audio hardware
+        log(f"TTS playback failed: {exc}")
+
+
+def _capture_text_input() -> str:
+    prompt = f"{Fore.CYAN}You>{Style.RESET_ALL} "
+    try:
+        return input(prompt).strip()
+    except EOFError:
+        return "quit"
+
+
+def _capture_voice_input() -> str:
     if not config.USE_STT:
-        log("Speech input disabled. Type your request instead.")
+        log("Voice mode requires USE_STT=True. Falling back to empty input.")
         return ""
-    log("Listening...")
+
+    if config.ENABLE_HOTWORD:
+        detected = hotword_detector.listen_for_hotword()
+        if not detected:
+            return ""
+        _speak_text("I'm listening.")
+    else:
+        if config.ENABLE_PUSH_TO_TALK:
+            input(config.PUSH_TO_TALK_PROMPT)
+        else:
+            input("Press ENTER to speak...")
+
+    log("Listening for your query...")
     text = stt_vosk.listen_once(timeout_seconds=config.MAX_LISTEN_SECONDS)
     if text:
         log(f"Heard: {text}")
     else:
         log("No speech recognized.")
-    return text
+    return text.strip()
+
+
+def _get_user_input() -> str:
+    mode = config.MODE.lower()
+    if mode == "voice":
+        return _capture_voice_input()
+    return _capture_text_input()
 
 
 _SENTENCE_PATTERN = re.compile(r"(?<=[.!?\n])")
@@ -68,11 +234,13 @@ def _extract_complete_segments(buffer: str) -> Tuple[List[str], str]:
     remainder = buffer[start:]
     return segments, remainder
 
+
 class TTSPipeline:
     """Handles queueing, synthesis, and playback for streamed speech."""
 
     def __init__(self) -> None:
         self.enabled = config.USE_TTS
+        self.interrupted = False
         if not self.enabled:
             self.mode: Optional[str] = None
             return
@@ -94,9 +262,31 @@ class TTSPipeline:
             self.threads[0].start()
 
     def enqueue(self, text: str) -> None:
-        if not self.enabled or not text:
+        if not self.enabled or not text or self.interrupted:
             return
         self.text_queue.put(text)
+
+    def interrupt(self) -> None:
+        """Stop all ongoing speech synthesis and playback."""
+        if not self.enabled:
+            return
+        self.interrupted = True
+        # Stop any currently playing audio immediately
+        tts_engine.stop_audio()
+        # Clear queues
+        while not self.text_queue.empty():
+            try:
+                self.text_queue.get_nowait()
+                self.text_queue.task_done()
+            except queue.Empty:
+                break
+        if self.mode == "buffered":
+            while not self.audio_queue.empty():
+                try:
+                    self.audio_queue.get_nowait()
+                    self.audio_queue.task_done()
+                except queue.Empty:
+                    break
 
     def close(self) -> None:
         if not self.enabled:
@@ -116,7 +306,12 @@ class TTSPipeline:
                 if text is None:
                     self.text_queue.task_done()
                     return
-                tts_engine.speak(text)
+                if not self.interrupted:
+                    tts_engine.speak(text)
+                    # Check if interrupted during speech
+                    if _interrupt_requested.is_set():
+                        self.interrupted = True
+                        tts_engine.stop_audio()
             except Exception as exc:
                 log(f"TTS playback failed: {exc}")
             finally:
@@ -131,8 +326,9 @@ class TTSPipeline:
                     self.audio_queue.put(None)
                     self.text_queue.task_done()
                     return
-                audio = tts_engine.synthesize_audio(text)
-                self.audio_queue.put(audio)
+                if not self.interrupted:
+                    audio = tts_engine.synthesize_audio(text)
+                    self.audio_queue.put(audio)
             except Exception as exc:
                 log(f"TTS synthesis failed: {exc}")
             finally:
@@ -146,8 +342,13 @@ class TTSPipeline:
                 if audio is None:
                     self.audio_queue.task_done()
                     return
-                buffer, sample_rate = audio
-                tts_engine.play_audio(buffer, sample_rate)
+                if not self.interrupted:
+                    buffer, sample_rate = audio
+                    tts_engine.play_audio(buffer, sample_rate)
+                    # Check if interrupted during playback
+                    if _interrupt_requested.is_set():
+                        self.interrupted = True
+                        tts_engine.stop_audio()
             except Exception as exc:
                 log(f"TTS playback failed: {exc}")
             finally:
@@ -155,19 +356,31 @@ class TTSPipeline:
                     self.audio_queue.task_done()
 
 
-def respond_to_query(query: str) -> str:
+def stream_llm_reply(prompt: str) -> str:
     """Stream LLM output to console and TTS for faster feedback."""
-    print(f"{Fore.GREEN}Assistant:{Style.RESET_ALL} ", end="", flush=True)
+    print(f"{Fore.GREEN}{config.ASSISTANT_NAME}:{Style.RESET_ALL} ", end="", flush=True)
     tts_worker = TTSPipeline()
     aggregated: List[str] = []
     buffer = ""
+    _interrupt_requested.clear()
+    
+    # Start voice interrupt listener
+    _start_voice_interrupt_listener()
 
     def enqueue(text: str) -> None:
         if tts_worker:
             tts_worker.enqueue(text)
 
     try:
-        for chunk in llm_engine.stream_response(query):
+        for chunk in llm_engine.stream_response(prompt):
+            # Check for interrupt
+            if _interrupt_requested.is_set():
+                if tts_worker:
+                    tts_worker.interrupt()
+                print(f"\n{Fore.YELLOW}[Interrupted]{Style.RESET_ALL}")
+                aggregated.append(" [interrupted]")
+                break
+            
             if not chunk:
                 continue
             aggregated.append(chunk)
@@ -176,32 +389,67 @@ def respond_to_query(query: str) -> str:
             completed, buffer = _extract_complete_segments(buffer)
             for piece in completed:
                 enqueue(piece)
-        leftover = buffer.strip()
-        if leftover:
-            enqueue(leftover)
+        
+        # Final check for interrupt
+        if not _interrupt_requested.is_set():
+            leftover = buffer.strip()
+            if leftover:
+                enqueue(leftover)
+        else:
+            if tts_worker:
+                tts_worker.interrupt()
+        
         print(Style.RESET_ALL)
         return "".join(aggregated).strip() or "(No response from model.)"
     finally:
         if tts_worker:
             tts_worker.close()
+        _stop_voice_interrupt_listener()
+        _interrupt_requested.clear()
+
+
+def _deliver_text_reply(text: str) -> None:
+    print(f"{Fore.GREEN}{config.ASSISTANT_NAME}:{Style.RESET_ALL} {text}")
+    _speak_text(text)
+
+
+def _process_user_query(user_text: str) -> None:
+    memory_manager.add_history_entry(user_text)
+    memory_manager.set_fact("last_query", user_text)
+    conversation_manager.add_turn("user", user_text)
+
+    if config.ENABLE_COMMANDS and commands_toolkit.is_command(user_text):
+        result = commands_toolkit.handle_command(user_text, memory=memory_manager, logger=log)
+        conversation_manager.add_turn("assistant", result)
+        _deliver_text_reply(result)
+        return
+
+    prompt = conversation_manager.build_prompt_with_context(
+        user_text,
+        system_preamble=getattr(config, "SYSTEM_PREAMBLE", None),
+    )
+    reply = stream_llm_reply(prompt)
+    conversation_manager.add_turn("assistant", reply)
 
 
 def main() -> None:
-    log("Starting local AI assistant. Press Ctrl+C to exit.")
     initialize_subsystems()
+    print_startup_banner()
+    
+    # Start keyboard listener for interrupts
+    listener = keyboard.Listener(on_press=_on_key_press)
+    listener.start()
 
     while True:
         try:
-            query = capture_user_input().strip()
-            if query.lower() == "quit":
+            user_text = _get_user_input().strip()
+            if not user_text:
+                continue
+            if user_text.lower() in {"quit", "exit"}:
                 log("Exiting on user request.")
                 return
-            if not query:
-                continue
-
-            print(f"{Fore.CYAN}You:{Style.RESET_ALL} {query}")
-            memory_manager.add_entry("last_query", query)
-            respond_to_query(query)
+            print(f"{Fore.CYAN}You:{Style.RESET_ALL} {user_text}")
+            _process_user_query(user_text)
         except KeyboardInterrupt:
             print("\n")
             log("Keyboard interrupt received. Goodbye!")

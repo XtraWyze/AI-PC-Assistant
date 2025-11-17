@@ -7,6 +7,7 @@ Offline-first voice assistant that runs entirely on Windows using locally hosted
 - Works without cloud services once dependencies are installed locally
 - Streams Ollama responses while simultaneously feeding them to the TTS pipeline
 - Optional speech input/output (toggle via `config.py`)
+- Hands-free "stop talking" voice interrupts while TTS is speaking
 - Lightweight key/value memory persisted to `data/memory.json`
 - Windows-friendly launcher script (`run_assistant.bat`)
 
@@ -59,6 +60,7 @@ run_assistant.bat
 
 - Set `USE_STT` or `USE_TTS` to `False` in `config.py` if you only want typing/console output.
 - `COQUI_TTS_MODEL`, `COQUI_TTS_SPEAKER`, and `COQUI_TTS_LANGUAGE` map directly to [Coqui TTS](https://github.com/coqui-ai/TTS) model options.
+- Voice interruptions are controlled by `ENABLE_VOICE_INTERRUPTS`, `VOICE_INTERRUPT_PHRASES`, and timing knobs in `config.py` (defaults stop playback when you say "stop"/"cancel").
 - Memory is a simple JSON dict stored at `local_ai_assistant/data/memory.json` (ignored by git); delete the file to reset history.
 
 ## Ready for GitHub
