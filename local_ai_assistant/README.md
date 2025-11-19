@@ -43,6 +43,14 @@ Press Enter to speak or type directly. Say "quit" or press `Ctrl+C` to exit.
 
 The orchestrator automatically handles routing, executing tools, and feeding tool responses back into the LLM, so the main loop stays lean.
 
+### Window / app control tool
+
+- `modules/window_control.py` exposes `handle_window_control(action, target_app=None, monitor=None)` for focus/minimize/maximize/restore/move.
+- The manifest entry is named `window_control`; the LLM calls it with actions like `"switch"`, `"bring_up"`, `"minimize"`, `"move"`, etc.
+- Spoken app names are normalized using `APP_ALIASES`, and the module can fall back to launching an app via `APP_LAUNCH_MAP` when no window is found.
+- To move windows between monitors, pass action `"move"` (or `"move_to_monitor"`) plus a `monitor` hint (e.g., `"left"`, `"right"`, `"primary"`, or `"monitor 2"`). The module keeps window size reasonable for the new display.
+- Extend the alias, launch map, or monitor hint handling to cover additional setups.
+
 ## Built-in local commands
 
 These run instantly without the LLM:

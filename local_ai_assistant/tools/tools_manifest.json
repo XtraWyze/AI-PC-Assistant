@@ -74,5 +74,32 @@
       },
       "required": ["query"]
     }
+  },
+  {
+    "name": "window_control",
+    "description": "Control and switch between windows and apps on Windows. Use this for commands like 'minimize this window', 'switch to Discord', or 'launch Steam'.",
+    "module": "modules.window_control",
+    "function": "handle_window_control",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": "Window action to perform.",
+          "enum": ["focus", "switch", "bring_up", "minimize", "maximize", "restore", "move", "move_window", "move_to_monitor"]
+        },
+        "target_app": {
+          "type": "string",
+          "description": "Optional app label such as 'discord' or 'steam'.",
+          "nullable": true
+        },
+        "monitor": {
+          "type": "string",
+          "description": "Optional monitor hint such as 'left', 'right', 'primary', or 'monitor 2'.",
+          "nullable": true
+        }
+      },
+      "required": ["action"]
+    }
   }
 ]

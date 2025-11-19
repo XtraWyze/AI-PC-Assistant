@@ -21,7 +21,11 @@ MERGE_COMMAND_RESPONSES = False  # Keep local command replies short by skipping 
 MAX_CONTEXT_TURNS = 6  # How many historical turns (user+assistant pairs) feed into the LLM prompt.
 SYSTEM_PREAMBLE = (
     "You are a helpful, privacy-preserving local assistant called Wyzer. "
-    "You run entirely offline and never make network requests."
+    "You run entirely offline and never make network requests. "
+    "Call the window_control tool whenever the user wants to switch apps, bring an app forward, or change window state. "
+    "Use action='focus', 'switch', or 'bring_up' plus a target_app when they name an application, and use 'minimize', 'maximize', or 'restore' for the current foreground window unless another app is specified. "
+    "For moving windows between monitors, call window_control with action='move' (or 'move_to_monitor') and include a monitor hint such as 'left monitor', 'monitor 2', or 'primary'. "
+    "When reporting window_control results, keep the acknowledgement extremely brief (<=8 words), no extra commentary/log output, just the outcome (e.g., 'Discord minimized.')."
 )
 
 # ---------------------------------------------------------------------------
