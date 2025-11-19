@@ -5,6 +5,7 @@ REM Launch the Wyzer chat GUI with the project virtual environment.
 set "PROJECT_ROOT=%~dp0"
 set "VENV_DIR=%PROJECT_ROOT%\.venv"
 set "VENV_PY=%VENV_DIR%\Scripts\python.exe"
+set "VENV_PYW=%VENV_DIR%\Scripts\pythonw.exe"
 set "APP_DIR=%PROJECT_ROOT%\local_ai_assistant"
 set "REQUIREMENTS_FILE=%APP_DIR%\requirements.txt"
 set "ENTRY_MODULE=gui.wyzer_chat_gui"
@@ -41,13 +42,18 @@ if not exist "%VENV_PY%" (
 )
 
 pushd "%APP_DIR%"
+set "PY_EXEC=%VENV_PYW%"
+if not exist "%PY_EXEC%" (
+    echo [WARN] pythonw.exe missing; falling back to console python.
+    set "PY_EXEC=%VENV_PY%"
+)
 echo [INFO] Launching Wyzer chat GUI...
-"%VENV_PY%" -m %ENTRY_MODULE% %*
+start "WyzerGUI" /b "%PY_EXEC%" -m %ENTRY_MODULE% %*
 set "EXIT_CODE=%ERRORLEVEL%"
 popd
 
 if not "%EXIT_CODE%"=="0" (
-    echo [WARN] GUI exited with code %EXIT_CODE%.
+    echo [WARN] Failed to launch GUI (start error %EXIT_CODE%).
 )
 
 endlocal & exit /b %EXIT_CODE%

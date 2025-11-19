@@ -58,6 +58,11 @@ SYSTEM_PREAMBLE = (
 )
 
 # ---------------------------------------------------------------------------
+# GUI preferences
+# ---------------------------------------------------------------------------
+SHOW_GUI_CONSOLE = False  # Hide the embedded CLI console inside wyzer_gui when False.
+
+# ---------------------------------------------------------------------------
 # LLM backend (Ollama) configuration
 # ---------------------------------------------------------------------------
 LLM_MODEL = "llama3.1:latest"  # Name of an Ollama model that is already pulled locally.

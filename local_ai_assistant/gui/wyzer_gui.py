@@ -87,6 +87,10 @@ class WyzerGUI(tk.Tk):
         self.minsize(960, 640)
         self.configure(bg="#1b1d23")
         self._configure_style()
+        self.cli_console_enabled = bool(getattr(config, "SHOW_GUI_CONSOLE", True))
+        self.console_text: Optional[tk.Text] = None
+        self.command_var: Optional[tk.StringVar] = None
+        self.command_entry: Optional[ttk.Entry] = None
 
         base_dir = Path(__file__).resolve().parent.parent
         self.modules_dir = base_dir / "modules"
@@ -158,11 +162,13 @@ class WyzerGUI(tk.Tk):
         content_frame = ttk.Frame(self)
         content_frame.grid(row=1, column=0, sticky="nsew", padx=12, pady=6)
         content_frame.columnconfigure(0, weight=1)
-        content_frame.columnconfigure(1, weight=2)
+        if self.cli_console_enabled:
+            content_frame.columnconfigure(1, weight=2)
         content_frame.rowconfigure(0, weight=1)
 
         left_panel = ttk.Frame(content_frame)
-        left_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        left_pad = (0, 8) if self.cli_console_enabled else (0, 0)
+        left_panel.grid(row=0, column=0, sticky="nsew", padx=left_pad)
         left_panel.rowconfigure(1, weight=1)
         left_panel.rowconfigure(3, weight=1)
 
@@ -176,40 +182,41 @@ class WyzerGUI(tk.Tk):
         self.features_frame = ScrollableFrame(left_panel, height=240)
         self.features_frame.grid(row=3, column=0, sticky="nsew", pady=(4, 0))
 
-        console_container = ttk.Frame(content_frame, style="Console.TFrame")
-        console_container.grid(row=0, column=1, sticky="nsew")
-        console_container.rowconfigure(0, weight=1)
-        console_container.columnconfigure(0, weight=1)
+        if self.cli_console_enabled:
+            console_container = ttk.Frame(content_frame, style="Console.TFrame")
+            console_container.grid(row=0, column=1, sticky="nsew")
+            console_container.rowconfigure(0, weight=1)
+            console_container.columnconfigure(0, weight=1)
 
-        console_header = ttk.Label(console_container, text="Console", style="Header.TLabel")
-        console_header.grid(row=0, column=0, sticky="w", padx=6, pady=(4, 2))
-        self.console_text = tk.Text(
-            console_container,
-            bg="#111217",
-            fg="#f8f9fa",
-            insertbackground="#f8f9fa",
-            highlightthickness=0,
-            borderwidth=0,
-            wrap="word",
-            font=("Consolas", 11),
-        )
-        self.console_text.grid(row=1, column=0, sticky="nsew", padx=6, pady=(0, 6))
-        self.console_text.configure(state=tk.DISABLED)
+            console_header = ttk.Label(console_container, text="Console", style="Header.TLabel")
+            console_header.grid(row=0, column=0, sticky="w", padx=6, pady=(4, 2))
+            self.console_text = tk.Text(
+                console_container,
+                bg="#111217",
+                fg="#f8f9fa",
+                insertbackground="#f8f9fa",
+                highlightthickness=0,
+                borderwidth=0,
+                wrap="word",
+                font=("Consolas", 11),
+            )
+            self.console_text.grid(row=1, column=0, sticky="nsew", padx=6, pady=(0, 6))
+            self.console_text.configure(state=tk.DISABLED)
 
-        console_scroll = ttk.Scrollbar(console_container, orient=tk.VERTICAL, command=self.console_text.yview)
-        console_scroll.grid(row=1, column=1, sticky="ns", pady=(0, 6))
-        self.console_text.configure(yscrollcommand=console_scroll.set)
+            console_scroll = ttk.Scrollbar(console_container, orient=tk.VERTICAL, command=self.console_text.yview)
+            console_scroll.grid(row=1, column=1, sticky="ns", pady=(0, 6))
+            self.console_text.configure(yscrollcommand=console_scroll.set)
 
-        input_frame = ttk.Frame(self)
-        input_frame.grid(row=2, column=0, sticky="ew", padx=12, pady=(6, 12))
-        input_frame.columnconfigure(0, weight=1)
+            input_frame = ttk.Frame(self)
+            input_frame.grid(row=2, column=0, sticky="ew", padx=12, pady=(6, 12))
+            input_frame.columnconfigure(0, weight=1)
 
-        self.command_var = tk.StringVar()
-        self.command_entry = ttk.Entry(input_frame, textvariable=self.command_var)
-        self.command_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        self.command_entry.bind("<Return>", self.run_command)
-        send_button = ttk.Button(input_frame, text="Send", command=self.run_command)
-        send_button.grid(row=0, column=1)
+            self.command_var = tk.StringVar()
+            self.command_entry = ttk.Entry(input_frame, textvariable=self.command_var)
+            self.command_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+            self.command_entry.bind("<Return>", self.run_command)
+            send_button = ttk.Button(input_frame, text="Send", command=self.run_command)
+            send_button.grid(row=0, column=1)
 
     def _build_controls(self) -> None:
         buttons = [
@@ -227,6 +234,8 @@ class WyzerGUI(tk.Tk):
     def _redirect_console_output(self) -> None:
         self._original_stdout = sys.stdout
         self._original_stderr = sys.stderr
+        if not self.cli_console_enabled:
+            return
         sys.stdout = ConsoleRedirect(self.append_console, self._original_stdout)
         sys.stderr = ConsoleRedirect(self.append_console, self._original_stderr)
 
@@ -234,9 +243,15 @@ class WyzerGUI(tk.Tk):
     # UI callbacks
     # ------------------------------------------------------------------
     def append_console(self, text: str) -> None:
+        message = text if text.endswith("\n") else f"{text}\n"
+        if self.console_text is None:
+            fallback = getattr(self, "_original_stdout", None) or sys.__stdout__
+            if fallback:
+                fallback.write(message)
+                fallback.flush()
+            return
         self.console_text.configure(state=tk.NORMAL)
-        to_insert = text if text.endswith("\n") else f"{text}\n"
-        self.console_text.insert(tk.END, to_insert)
+        self.console_text.insert(tk.END, message)
         self.console_text.see(tk.END)
         self.console_text.configure(state=tk.DISABLED)
 
@@ -284,6 +299,8 @@ class WyzerGUI(tk.Tk):
             self.feature_buttons[module_name] = btn
 
     def run_command(self, event: Optional[tk.Event] = None) -> None:
+        if self.command_var is None:
+            return
         user_text = self.command_var.get().strip()
         if not user_text:
             return
