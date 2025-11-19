@@ -41,6 +41,17 @@ Press Enter to speak or type directly. Say "quit" or press `Ctrl+C` to exit.
 	2. Append a new object to `tools/tools_manifest.json` with the tool name, description, module path, callable name, and parameter schema.
 	3. Restart `assistant.py` so the orchestrator reloads the manifest.
 
+### Web search tool
+
+- `modules.web_search.run_search` first tries the SerpAPI free DuckDuckGo endpoint (10 s timeout) and falls back to scraping DuckDuckGo HTML.
+- Tool manifest entry: `name="web_search"`, `description="Search the internet for live information."`, single string argument `query`.
+- Debug output is emitted from the orchestrator whenever the tool fires so you can inspect the query + structured JSON.
+- Sample call that triggers the tool:
+
+```
+user: "Search the internet for RTX 5090 release date."
+```
+
 The orchestrator automatically handles routing, executing tools, and feeding tool responses back into the LLM, so the main loop stays lean.
 
 ## Built-in local commands
