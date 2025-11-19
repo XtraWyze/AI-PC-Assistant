@@ -8,7 +8,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import config
 from modules import llm_engine
-from modules.web_search import run_search as web_search_run_search
 from utils.logger import log
 
 ToolCallable = Callable[..., Any]
@@ -138,19 +137,6 @@ class Orchestrator:
         except Exception as exc:  # pragma: no cover - tool safety net
             log(f"Tool '{tool_name}' failed: {exc}")
             return {"status": "error", "error": str(exc)}
-
-    def _run_web_search(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        query_value = arguments.get("query", "") if isinstance(arguments, dict) else ""
-        query = str(query_value)
-        try:
-            results = web_search_run_search(query)
-        except Exception as exc:  # pragma: no cover - safety net
-            log(f"web_search tool failed: {exc}")
-            return {"status": "error", "error": str(exc)}
-
-        print("[WebSearch] Query:", query)
-        print("[WebSearch] Results:", results)
-        return {"status": "success", "result": results}
 
     def route(
         self,
@@ -342,10 +328,7 @@ class Orchestrator:
         for call in tool_calls:
             name = call.get("name")
             arguments = call.get("arguments", {})
-            if (name or "") == "web_search":
-                result = self._run_web_search(arguments)
-            else:
-                result = self.run_tool(name or "", arguments)
+            result = self.run_tool(name or "", arguments)
             conversation_state.append(
                 {
                     "role": "tool",

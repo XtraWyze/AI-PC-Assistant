@@ -74,27 +74,5 @@
       },
       "required": ["query"]
     }
-  },
-  {
-    "name": "web_search",
-    "description": "Search the internet for live information.",
-    "module": "modules.web_search",
-    "function": "run_search",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "query": {
-          "type": "string",
-          "description": "Search terms"
-        }
-      },
-      "required": ["query"]
-    },
-    "args": {
-      "query": {
-        "type": "string",
-        "description": "Search terms"
-      }
-    }
   }
 ]
