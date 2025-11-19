@@ -67,6 +67,11 @@ class WyzerChatGUI(tk.Tk):
 
         self.tts_ready = False
         self._tts_lock = threading.Lock()
+        self._tts_playback_lock = threading.Lock()
+        self._interrupt_event = threading.Event()
+        self._tts_playing = False
+        self._voice_interrupt_thread: Optional[threading.Thread] = None
+        self._voice_interrupt_stop_event: Optional[threading.Event] = None
         self._send_lock = threading.Lock()
         self._follow_up_token = 0
         self._hotword_paused_for_follow_up = False
@@ -85,6 +90,7 @@ class WyzerChatGUI(tk.Tk):
         self.create_widgets()
         self.layout_widgets()
         self._bind_events()
+        self._update_interrupt_button_state(False)
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.after(200, lambda: self.add_message("assistant", "Ready when you are."))
@@ -125,6 +131,7 @@ class WyzerChatGUI(tk.Tk):
             command=self.toggle_tts,
             style="Wyzer.TCheckbutton",
         )
+        self.stop_button = ttk.Button(self.control_bar, text="Stop", command=self.request_interrupt)
         self.clear_button = ttk.Button(self.control_bar, text="Clear", command=self.clear_chat)
 
         self.input_bar = tk.Frame(self, bg=self.BG_COLOR)
@@ -160,7 +167,7 @@ class WyzerChatGUI(tk.Tk):
 
         self.control_bar.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 8))
         for index, widget in enumerate(
-            [self.mic_button, self.hotword_toggle, self.tts_toggle, self.clear_button]
+            [self.mic_button, self.hotword_toggle, self.tts_toggle, self.stop_button, self.clear_button]
         ):
             widget.grid(row=0, column=index, padx=(0, 8))
             self.control_bar.columnconfigure(index, weight=0)
@@ -178,6 +185,7 @@ class WyzerChatGUI(tk.Tk):
         self.chat_canvas.bind("<Configure>", self._on_canvas_configure)
         self.input_text.bind("<Return>", self._on_enter_pressed)
         self.input_text.bind("<Shift-Return>", self._on_shift_enter)
+        self.bind_all("<Escape>", self._on_escape_pressed)
 
     def _configure_theme(self) -> None:
         """Set up ttk theme overrides for the light UI."""
@@ -331,6 +339,87 @@ class WyzerChatGUI(tk.Tk):
 
         for child in self.chat_frame.winfo_children():
             child.destroy()
+
+    # ------------------------------------------------------------------
+    # Interruption controls
+    # ------------------------------------------------------------------
+    def _mark_tts_playback(self, active: bool) -> None:
+        self._tts_playing = active
+        self.after(0, lambda state=active: self._update_interrupt_button_state(state))
+
+    def _update_interrupt_button_state(self, active: bool) -> None:
+        if not hasattr(self, "stop_button"):
+            return
+        state = tk.NORMAL if active else tk.DISABLED
+        self.stop_button.configure(state=state)
+
+    def request_interrupt(self) -> None:
+        """Stop the current TTS playback (invoked by button, ESC, or voice)."""
+
+        if not self._tts_playing and not self._interrupt_event.is_set():
+            return
+        self._interrupt_event.set()
+        if self._voice_interrupt_stop_event:
+            self._voice_interrupt_stop_event.set()
+        if tts_engine is not None:
+            try:
+                tts_engine.stop_audio()
+            except Exception:
+                pass
+
+    def _start_voice_interrupt_listener(self) -> None:
+        if self._voice_interrupt_thread and self._voice_interrupt_thread.is_alive():
+            return
+        if not getattr(config, "ENABLE_VOICE_INTERRUPTS", False):
+            return
+        if not getattr(config, "USE_STT", False):
+            return
+        if stt_vosk is None:
+            return
+        phrases = list(getattr(config, "VOICE_INTERRUPT_PHRASES", []) or [])
+        if not phrases:
+            return
+        stop_event = threading.Event()
+        self._voice_interrupt_stop_event = stop_event
+        thread = threading.Thread(
+            target=self._voice_interrupt_worker,
+            args=(stop_event, phrases),
+            daemon=True,
+        )
+        self._voice_interrupt_thread = thread
+        thread.start()
+
+    def _stop_voice_interrupt_listener(self) -> None:
+        if self._voice_interrupt_stop_event:
+            self._voice_interrupt_stop_event.set()
+        thread = self._voice_interrupt_thread
+        if thread and thread.is_alive():
+            thread.join(timeout=1.0)
+        self._voice_interrupt_thread = None
+        self._voice_interrupt_stop_event = None
+
+    def _voice_interrupt_worker(self, stop_event: threading.Event, phrases: list[str]) -> None:
+        if stt_vosk is None:
+            return
+        try:
+            detector = stt_vosk.VoiceInterruptDetector(phrases)
+        except Exception as exc:  # pragma: no cover - audio hardware
+            logger(f"Voice interrupt listener unavailable: {exc}")
+            return
+
+        try:
+            detected = detector.listen_continuous(stop_event=stop_event)
+        except Exception as exc:  # pragma: no cover - audio hardware
+            logger(f"Voice interrupt listener error: {exc}")
+            detected = False
+        finally:
+            detector.close()
+
+        if detected:
+            self.request_interrupt()
+
+    def _on_escape_pressed(self, _event: tk.Event) -> None:
+        self.request_interrupt()
 
     # ------------------------------------------------------------------
     # Input handling
@@ -527,6 +616,7 @@ class WyzerChatGUI(tk.Tk):
         """Lazy-init TTS when enabling the toggle."""
 
         if not self.tts_var.get():
+            self.request_interrupt()
             return
         if tts_engine is None:
             messagebox.showwarning("TTS", "Text-to-speech module is unavailable.")
@@ -551,13 +641,25 @@ class WyzerChatGUI(tk.Tk):
             return
 
         def worker() -> None:
-            try:
-                tts_engine.speak(text)
-            except Exception as exc:  # pragma: no cover - optional dependency
-                self._post_message("assistant", f"TTS failed: {exc}")
-            finally:
-                if trigger_follow_up:
-                    self.after(0, self._start_follow_up_window)
+            interrupted = False
+            with self._tts_playback_lock:
+                self._interrupt_event.clear()
+                self._mark_tts_playback(True)
+                self._start_voice_interrupt_listener()
+                try:
+                    tts_engine.speak(text)
+                except Exception as exc:  # pragma: no cover - optional dependency
+                    self._post_message("assistant", f"TTS failed: {exc}")
+                finally:
+                    interrupted = self._interrupt_event.is_set()
+                    self._stop_voice_interrupt_listener()
+                    self._mark_tts_playback(False)
+                    self._interrupt_event.clear()
+
+            if interrupted:
+                self._post_message("assistant", "[Speech interrupted]")
+            elif trigger_follow_up:
+                self.after(0, self._start_follow_up_window)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -648,6 +750,7 @@ class WyzerChatGUI(tk.Tk):
 
         if self.hotword_stop_event:
             self.hotword_stop_event.set()
+        self._stop_voice_interrupt_listener()
         self.destroy()
 
 

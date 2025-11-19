@@ -87,6 +87,7 @@ Set `MERGE_COMMAND_RESPONSES=False` in `config.py` if you prefer instant local a
 
 - Toggle `USE_STT`/`USE_TTS` in `config.py` to disable audio subsystems.
 - Voice interrupts are enabled by default—say "stop" or "cancel" while TTS is speaking to cut it off (`ENABLE_VOICE_INTERRUPTS`).
+- In the Wyzer Chat GUI you can also click the **Stop** button (or press `Esc`) to cancel the current reply; voice phrases use the same interrupt hook when TTS is enabled.
 - The interrupt listener keeps the microphone stream open at all times for near-zero latency; disable the feature entirely if you need to reclaim the input device.
 - `data/memory.json` stores lightweight key/value context.
 - Logs can optionally be written to `logs/assistant.log` via `utils/logger.py`.
