@@ -32,3 +32,5 @@ local_ai_assistant/models/
 .DS_Store
 Thumbs.db
 desktop.ini
+local_ai_assistant/data/app_registry.json
+local_ai_assistant/data/file_index.json
