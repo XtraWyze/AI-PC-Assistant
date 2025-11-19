@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import os
 import queue
-import re
 import sys
 import threading
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -242,20 +241,32 @@ def _get_user_input() -> str:
     return _capture_text_input()
 
 
-_SENTENCE_PATTERN = re.compile(r"(?<=[.!?\n])")
+def _should_end_sentence(text: str, index: int) -> bool:
+    char = text[index]
+    if char == "\n":
+        return True
+    if char not in ".!?":
+        return False
+    if char == ".":
+        prev_char = text[index - 1] if index > 0 else ""
+        next_char = text[index + 1] if index + 1 < len(text) else ""
+        if prev_char.isdigit() and next_char.isdigit():
+            return False
+    return True
 
 
 def _extract_complete_segments(buffer: str) -> Tuple[List[str], str]:
     """Return completed sentences and the remaining buffer."""
     segments: List[str] = []
-    start = 0
-    for match in _SENTENCE_PATTERN.finditer(buffer):
-        end = match.end()
-        segment = buffer[start:end].strip()
-        if segment:
-            segments.append(segment)
-        start = end
-    remainder = buffer[start:]
+    current: List[str] = []
+    for idx, char in enumerate(buffer):
+        current.append(char)
+        if _should_end_sentence(buffer, idx):
+            segment = "".join(current).strip()
+            if segment:
+                segments.append(segment)
+            current = []
+    remainder = "".join(current)
     return segments, remainder
 
 
@@ -281,6 +292,11 @@ def _iter_tts_chunks(text: str, max_chunk_chars: int = 240) -> Iterable[str]:
             chunk = chunk[split_at:].strip()
         if chunk:
             yield chunk
+
+
+def _sanitize_tts_text(text: str) -> str:
+    """Remove characters that sound awkward in speech (e.g., literal '$')."""
+    return text.replace("$", "").strip()
 
 
 class TTSPipeline:
@@ -312,7 +328,9 @@ class TTSPipeline:
     def enqueue(self, text: str) -> None:
         if not self.enabled or not text or self.interrupted:
             return
-        self.text_queue.put(text)
+        cleaned = _sanitize_tts_text(text)
+        if cleaned:
+            self.text_queue.put(cleaned)
 
     def interrupt(self) -> None:
         """Stop all ongoing speech synthesis and playback."""

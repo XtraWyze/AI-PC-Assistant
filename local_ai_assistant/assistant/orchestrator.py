@@ -8,6 +8,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import config
 from modules import llm_engine, voice_typing
+from modules.tools.open_file_location import run_tool as open_file_location
+from modules.tools.open_path import run_tool as open_path
 from modules.tools.open_website import open_website
 from utils.logger import log
 
@@ -17,6 +19,8 @@ ToolSchema = Dict[str, Any]
 
 STATIC_TOOL_BINDINGS: Dict[str, ToolCallable] = {
     "open_website": open_website,
+    "open_path": open_path,
+    "open_file_location": open_file_location,
 }
 
 WEATHER_COORDINATE_TOOLS = {

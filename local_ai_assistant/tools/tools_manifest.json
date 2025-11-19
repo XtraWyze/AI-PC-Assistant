@@ -169,6 +169,100 @@
     }
   },
   {
+    "name": "open_path",
+    "description": "Open a file or folder on the local Windows system by friendly name or path.",
+    "module": "modules.tools.open_path",
+    "function": "run_tool",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "The file, folder, or app the user wants opened (name, friendly phrase, or absolute path)."
+        }
+      },
+      "required": ["target"]
+    }
+  },
+  {
+    "name": "open_file_location",
+    "description": "Find a file by name or description using file_index.json and open the folder that contains it.",
+    "module": "modules.tools.open_file_location",
+    "function": "run_tool",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "Description or name of the file whose location should be opened (e.g., 'desktop.ini in documents', 'rocket league log')."
+        }
+      },
+      "required": ["target"]
+    }
+  },
+  {
+    "name": "search_web",
+    "description": "Search DuckDuckGo for fresh public web results when the user needs up-to-date info.",
+    "module": "modules.tools.web_access",
+    "function": "search_web",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Natural language search string to send to DuckDuckGo."
+        },
+        "max_results": {
+          "type": "integer",
+          "description": "Maximum number of web results to return (default 5).",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 10
+        }
+      },
+      "required": ["query"]
+    }
+  },
+  {
+    "name": "fetch_page",
+    "description": "Download a URL and return the cleaned, visible text so the user can read it.",
+    "module": "modules.tools.web_access",
+    "function": "fetch_page",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "Fully-qualified URL to download."
+        }
+      },
+      "required": ["url"]
+    }
+  },
+  {
+    "name": "summarize_page",
+    "description": "Fetch a URL and return a short excerpt so the user can get the gist quickly.",
+    "module": "modules.tools.web_access",
+    "function": "summarize_page",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "Fully-qualified URL whose contents should be summarized."
+        },
+        "max_chars": {
+          "type": "integer",
+          "description": "Maximum number of visible characters to return (default 1500).",
+          "default": 1500,
+          "minimum": 100,
+          "maximum": 6000
+        }
+      },
+      "required": ["url"]
+    }
+  },
+  {
     "name": "get_time_date",
     "description": "Retrieve the current local time, ISO date, and weekday.",
     "module": "modules.tools.get_time_date",

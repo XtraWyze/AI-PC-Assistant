@@ -18,6 +18,8 @@ from utils.logger import log as default_logger
 from utils.processes import launch_detached
 
 from . import app_registry, audio_control, file_indexer, file_search, gamebar_recorder
+from .tools import open_file_location as open_file_location_tool
+from .tools.open_file_location import COMMAND_PREFIXES as _FILE_LOCATION_PREFIXES
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FALLBACK_HOMEPAGE = "https://github.com"
@@ -86,6 +88,8 @@ _GAMEBAR_STOP_RECORDING_COMMANDS = {
     "end recording",
     "stop capture",
 }
+
+_FILE_LOCATION_COMMAND_PREFIXES: tuple[str, ...] = tuple(prefix.strip() for prefix in _FILE_LOCATION_PREFIXES)
 
 _FOLDER_PATTERN = re.compile(r"open\s+folder\s+(.+)", re.IGNORECASE)
 _TYPE_PATTERN = re.compile(r"type\s*(?::|-)?\s*(.+)", re.IGNORECASE)
@@ -268,6 +272,12 @@ def _match_media_command(normalized: str) -> tuple[int, str] | None:
     return None
 
 
+def _is_file_location_command(normalized: str) -> bool:
+    if not normalized:
+        return False
+    return any(normalized.startswith(prefix) for prefix in _FILE_LOCATION_COMMAND_PREFIXES)
+
+
 def _send_key_event(keycode: int) -> None:
     if os.name != "nt":  # pragma: no cover - Windows-specific behavior
         raise RuntimeError("Media key simulation is only supported on Windows.")
@@ -287,6 +297,8 @@ def is_command(text: str) -> bool:
     if not text:
         return False
     normalized = _normalize(text)
+    if _is_file_location_command(normalized):
+        return True
     if _parse_volume_command(text):
         return True
     if normalized in _SCAN_COMMANDS or normalized in _LIST_COMMANDS:
@@ -363,6 +375,8 @@ def handle_command(text: str, logger=default_logger) -> str:
             return _handle_open_notepad()
         if normalized.startswith("open folder"):
             return _handle_open_folder(text)
+        if _is_file_location_command(normalized):
+            return _handle_open_file_location(text, logger=logger)
         if normalized == "take screenshot":
             return _handle_screenshot()
         if normalized.startswith("type:") or normalized.startswith("type "):
@@ -446,6 +460,30 @@ def _handle_open_folder(command_text: str) -> str:
     except AttributeError as exc:  # Non-Windows safeguard
         raise RuntimeError("Folder opening is only supported on Windows.") from exc
     return f"Opening {target}."
+
+
+def _handle_open_file_location(command_text: str, logger=default_logger) -> str:
+    try:
+        result = open_file_location_tool(target=command_text)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger(f"open_file_location tool raised unexpectedly: {exc}")
+        return "Unable to open that file location."
+
+    if not isinstance(result, dict):
+        logger("open_file_location tool returned an unexpected payload type.")
+        return "Unable to open that file location."
+
+    status = (result.get("status") or "").lower()
+    if status == "ok":
+        file_path = result.get("file")
+        if file_path:
+            label = Path(file_path).name or "the file"
+            return f"Opening the folder containing {label}."
+        return "Opening the folder now."
+
+    message = result.get("message") or "Unable to open that file location."
+    logger(f"open_file_location tool failed: {message}")
+    return message
 
 
 def _handle_screenshot() -> str:
