@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import config
-from modules import llm_engine
+from modules import llm_engine, voice_typing
 from utils.logger import log
 
 ToolCallable = Callable[..., Any]
@@ -109,6 +109,40 @@ class Orchestrator:
         schemas = self.get_tool_schemas()
         return schemas or None
 
+    def _handle_voice_typing_intent(self, cleaned: str) -> Optional[Message]:
+        """Intercept simple voice-typing toggle intents before hitting the LLM."""
+        if not getattr(config, "ENABLE_VOICE_TYPING", False):
+            return None
+
+        normalized = cleaned.strip().lower()
+        if not normalized:
+            return None
+
+        enable_phrases = {
+            "enable voice typing",
+            "start typing mode",
+            "start typing",
+            "start dictation",
+        }
+        disable_phrases = {
+            "disable voice typing",
+            "stop typing mode",
+            "stop typing",
+            "cancel dictation",
+        }
+
+        if normalized in enable_phrases:
+            success = voice_typing.enable_voice_typing()
+            message = "Voice typing enabled." if success else "Voice typing is unavailable right now."
+            return {"role": "assistant", "content": message}
+
+        if normalized in disable_phrases:
+            changed = voice_typing.disable_voice_typing()
+            message = "Voice typing disabled." if changed else "Voice typing was already off."
+            return {"role": "assistant", "content": message}
+
+        return None
+
     # ------------------------------------------------------------------
     # LLM + routing
     # ------------------------------------------------------------------
@@ -150,6 +184,10 @@ class Orchestrator:
             raise ValueError("route() requires non-empty user input.")
 
         conversation_state.append({"role": "user", "content": cleaned})
+        intercepted = self._handle_voice_typing_intent(cleaned)
+        if intercepted:
+            conversation_state.append(intercepted)
+            return intercepted
         response = self._invoke_llm_with_directive(conversation_state, assistant_directive)
         message = self._handle_llm_response(response, conversation_state, assistant_directive)
         conversation_state.append(message)
@@ -170,6 +208,10 @@ class Orchestrator:
             raise ValueError("stream_route() requires non-empty user input.")
 
         conversation_state.append({"role": "user", "content": cleaned})
+        intercepted = self._handle_voice_typing_intent(cleaned)
+        if intercepted:
+            conversation_state.append(intercepted)
+            return intercepted, False
         response = self._invoke_llm_streaming(
             conversation_state,
             assistant_directive,

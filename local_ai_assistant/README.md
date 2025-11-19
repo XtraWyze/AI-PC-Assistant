@@ -51,6 +51,12 @@ The orchestrator automatically handles routing, executing tools, and feeding too
 - To move windows between monitors, pass action `"move"` (or `"move_to_monitor"`) plus a `monitor` hint (e.g., `"left"`, `"right"`, `"primary"`, or `"monitor 2"`). The module keeps window size reasonable for the new display.
 - Extend the alias, launch map, or monitor hint handling to cover additional setups.
 
+### Voice typing control tool
+
+- `modules/voice_typing.py` now exposes `control_voice_typing(action, text=None)` so the LLM can enable/disable dictation, check status, or inject keystrokes on demand.
+- The manifest entry `voice_typing_control` accepts `action` values `enable`, `disable`, `toggle`, `status`, or `type`; provide `text` only when action is `type`.
+- Results include whether typing mode is currently enabled plus metadata such as backend readiness or the number of characters typed, giving the model clear feedback.
+
 ## Built-in local commands
 
 These run instantly without the LLM:

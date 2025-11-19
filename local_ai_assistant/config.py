@@ -40,6 +40,7 @@ ENABLE_LLM_TOOLS = True  # Flip to False if your Ollama build doesn't support ch
 # ---------------------------------------------------------------------------
 USE_TTS = True  # Enable Text-To-Speech responses.
 USE_STT = True  # Enable speech recognition via Whisper.
+ENABLE_VOICE_TYPING = True  # Allow transcripts to be typed into the active window via pyautogui.
 STT_ENGINE = "whisper"  # Future-proof selector in case alternative engines are added.
 WHISPER_MODEL = "small"  # Options include "tiny", "base", "small", "medium", "large-v2", etc.
 WHISPER_DEVICE = "auto"  # "auto" picks CUDA when available, else CPU.

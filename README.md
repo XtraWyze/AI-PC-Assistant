@@ -63,6 +63,27 @@ run_assistant.bat
 - Voice interruptions are controlled by `ENABLE_VOICE_INTERRUPTS`, `VOICE_INTERRUPT_PHRASES`, and timing knobs in `config.py` (defaults stop playback when you say "stop"/"cancel").
 - Memory is a simple JSON dict stored at `local_ai_assistant/data/memory.json` (ignored by git); delete the file to reset history.
 
+## Voice Typing / Dictation Mode
+
+- Flip `ENABLE_VOICE_TYPING = True` in `local_ai_assistant/config.py` to allow transcripts to be typed into whichever window currently has focus (uses `pyautogui`).
+- Say "start typing" or "start typing mode" after the hotword to enable dictation, and "stop typing" or "stop typing mode" to turn it off.
+- While dictation is enabled, every recognized utterance is sent to the foreground app; say "new line" for Enter, "backspace" to delete the last character, and "stop typing" to exit the mode.
+- Use this feature carefully—the assistant cannot tell which window you intend to target and will blindly type into the active application.
+
+### Voice Navigation Commands
+
+Regardless of whether dictation mode is currently on, you can steer the cursor hands-free with these phrases (case/wording is flexible; partial matches are accepted):
+
+- `press enter/new line/newline/line break`
+- `press tab` / `press shift tab`
+- `press escape`, `press space`, `press space bar`
+- `press backspace/delete last/undo last`, `press delete`
+- `press up/down/left/right (arrow)`
+- `press control c/v/x/a`, `go to the top/bottom`, `select all`
+- `undo` (`ctrl+z`), `redo` (`ctrl+y`), `press alt tab`
+
+> ⚠️ **Safety**: Voice typing sends hotkeys to *whatever* app currently has focus—even if you haven’t explicitly enabled dictation—so make sure the intended window is active before issuing navigation commands.
+
 ## Ready for GitHub
 
 - `.gitignore` excludes virtual environments, downloaded models, logs, and runtime artifacts.

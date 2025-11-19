@@ -101,5 +101,27 @@
       },
       "required": ["action"]
     }
+  },
+  {
+    "name": "voice_typing_control",
+    "description": "Enable or disable dictation mode and optionally type text into the active window via pyautogui.",
+    "module": "modules.voice_typing",
+    "function": "control_voice_typing",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": "Voice typing control action.",
+          "enum": ["enable", "disable", "toggle", "status", "type"]
+        },
+        "text": {
+          "type": "string",
+          "description": "Text to type when action='type'.",
+          "nullable": true
+        }
+      },
+      "required": ["action"]
+    }
   }
 ]

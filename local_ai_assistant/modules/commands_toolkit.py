@@ -61,7 +61,7 @@ _MEDIA_COMMANDS: list[tuple[str, int, str]] = [
 ]
 
 _FOLDER_PATTERN = re.compile(r"open\s+folder\s+(.+)", re.IGNORECASE)
-_TYPE_PATTERN = re.compile(r"type\s*:\s*(.+)", re.IGNORECASE)
+_TYPE_PATTERN = re.compile(r"type\s*(?::|-)?\s*(.+)", re.IGNORECASE)
 
 _SET_VOLUME_PATTERNS: tuple[tuple[re.Pattern[str], bool], ...] = (
     (
@@ -266,7 +266,7 @@ def is_command(text: str) -> bool:
         return True
     if normalized in {"open browser", "open chrome", "open notepad", "take screenshot"}:
         return True
-    if normalized.startswith("open folder") or normalized.startswith("type:"):
+    if normalized.startswith("open folder") or normalized.startswith("type:") or normalized.startswith("type "):
         return True
     if normalized in _CLOSE_COMMANDS or normalized.startswith("close "):
         return True
@@ -323,7 +323,7 @@ def handle_command(text: str, logger=default_logger) -> str:
             return _handle_open_folder(text)
         if normalized == "take screenshot":
             return _handle_screenshot()
-        if normalized.startswith("type:"):
+        if normalized.startswith("type:") or normalized.startswith("type "):
             return _handle_type(text)
         if normalized in _CLOSE_COMMANDS or normalized.startswith("close "):
             return _handle_close_app(text, logger=logger)
@@ -421,10 +421,10 @@ def _handle_screenshot() -> str:
 def _handle_type(command_text: str) -> str:
     match = _TYPE_PATTERN.match(command_text.strip())
     if not match:
-        return "Please provide text after 'type:'."
+        return "Please provide text after 'type'."
     payload = match.group(1).strip()
     if not payload:
-        return "Please provide text after 'type:'."
+        return "Please provide text after 'type'."
 
     pyautogui = _load_pyautogui()
     time.sleep(0.4)

@@ -21,6 +21,7 @@ from modules import (
     memory_manager,
     stt_vosk,
     tts_engine,
+    voice_typing,
 )
 from utils.logger import log
 
@@ -226,6 +227,9 @@ def _capture_voice_input() -> str:
     text = stt_vosk.listen_once(timeout_seconds=config.MAX_LISTEN_SECONDS)
     if text:
         log(f"Heard: {text}")
+        if voice_typing.process_transcript(text):
+            log("Voice typing handled the transcript locally; skipping assistant pipeline.")
+            return ""
     else:
         log("No speech recognized.")
     return text.strip()
@@ -581,6 +585,9 @@ def _listen_for_follow_up_query() -> str:
     text = heard.strip()
     if text:
         log(f"Follow-up heard: {text}")
+        if voice_typing.process_transcript(text):
+            log("Voice typing handled the follow-up locally; skipping assistant pipeline.")
+            return ""
     return text
 
 
