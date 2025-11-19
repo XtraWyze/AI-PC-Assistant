@@ -8,11 +8,16 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import config
 from modules import llm_engine, voice_typing
+from modules.tools.open_website import open_website
 from utils.logger import log
 
 ToolCallable = Callable[..., Any]
 Message = Dict[str, Any]
 ToolSchema = Dict[str, Any]
+
+STATIC_TOOL_BINDINGS: Dict[str, ToolCallable] = {
+    "open_website": open_website,
+}
 
 
 class Orchestrator:
@@ -73,12 +78,16 @@ class Orchestrator:
             if not (name and module_path and function_name):
                 log(f"Skipping malformed tool entry: {entry}")
                 continue
-            try:
-                module = importlib.import_module(module_path)
-                func: ToolCallable = getattr(module, function_name)
-            except (ImportError, AttributeError) as exc:
-                log(f"Unable to import tool '{name}' ({module_path}.{function_name}): {exc}")
-                continue
+            manual_binding = STATIC_TOOL_BINDINGS.get(name)
+            if manual_binding:
+                func = manual_binding
+            else:
+                try:
+                    module = importlib.import_module(module_path)
+                    func = getattr(module, function_name)
+                except (ImportError, AttributeError) as exc:
+                    log(f"Unable to import tool '{name}' ({module_path}.{function_name}): {exc}")
+                    continue
 
             self.tools_registry[name] = {
                 "callable": func,

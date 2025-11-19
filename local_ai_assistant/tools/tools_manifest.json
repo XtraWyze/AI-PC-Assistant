@@ -146,5 +146,26 @@
       },
       "required": ["action"]
     }
+  },
+  {
+    "name": "open_website",
+    "description": "Open a website in the user's browser. Supports Chrome specifically when requested.",
+    "module": "modules.tools.open_website",
+    "function": "open_website",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "The site to open. Can be a domain like 'facebook' or a full URL."
+        },
+        "browser": {
+          "type": "string",
+          "description": "Optional browser hint such as 'chrome' or 'default'.",
+          "nullable": true
+        }
+      },
+      "required": ["url"]
+    }
   }
 ]
