@@ -57,6 +57,12 @@ The orchestrator automatically handles routing, executing tools, and feeding too
 - The manifest entry `voice_typing_control` accepts `action` values `enable`, `disable`, `toggle`, `status`, or `type`; provide `text` only when action is `type`.
 - Results include whether typing mode is currently enabled plus metadata such as backend readiness or the number of characters typed, giving the model clear feedback.
 
+### Xbox Game Bar capture tool
+
+- `modules/gamebar_recorder.py` drives the Windows shortcut keys (`Win+Alt+G` / `Win+Alt+R`) so the assistant can save recent gameplay or toggle an ongoing recording.
+- The manifest entry `gamebar_capture` exposes the action list `record_last_30_seconds`, `record_that`, `start_recording`, `stop_recording`, and `toggle_recording`.
+- Game Bar shortcuts require Windows and that background recording is already enabled in the Xbox app settings.
+
 ## Built-in local commands
 
 These run instantly without the LLM:
@@ -66,6 +72,7 @@ These run instantly without the LLM:
 - `close <app>` issues a Windows `taskkill` for the target process (falls back to `<name>.exe` if the app isn't indexed).
 - `open folder <path>` opens a directory in Explorer.
 - `open browser`, `open chrome`, `open notepad`, `take screenshot`, and `type: ...` provide quick PC controls.
+- `record that`, `start recording this`, and `stop recording` forward to Xbox Game Bar hotkeys so you can capture highlights hands-free.
 
 Set `MERGE_COMMAND_RESPONSES=False` in `config.py` if you prefer instant local acknowledgements instead of routing the action summary back through the LLM.
 

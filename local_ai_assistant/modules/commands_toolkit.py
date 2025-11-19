@@ -15,8 +15,9 @@ from typing import Any, Optional
 
 import config
 from utils.logger import log as default_logger
+from utils.processes import launch_detached
 
-from . import app_registry, audio_control, file_indexer, file_search
+from . import app_registry, audio_control, file_indexer, file_search, gamebar_recorder
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FALLBACK_HOMEPAGE = "https://github.com"
@@ -59,6 +60,32 @@ _MEDIA_COMMANDS: list[tuple[str, int, str]] = [
     ("volume down", VK_VOLUME_DOWN, "Volume decreased."),
     ("turn down", VK_VOLUME_DOWN, "Volume decreased."),
 ]
+
+_GAMEBAR_RECORD_THAT_COMMANDS = {
+    "record that",
+    "record last 30 seconds",
+    "record last thirty seconds",
+    "save last 30 seconds",
+    "save last thirty seconds",
+    "save that clip",
+}
+
+_GAMEBAR_START_RECORDING_COMMANDS = {
+    "start recording",
+    "start recording this",
+    "start recording now",
+    "begin recording",
+    "record this",
+    "start capture",
+}
+
+_GAMEBAR_STOP_RECORDING_COMMANDS = {
+    "stop recording",
+    "stop recording this",
+    "stop recording now",
+    "end recording",
+    "stop capture",
+}
 
 _FOLDER_PATTERN = re.compile(r"open\s+folder\s+(.+)", re.IGNORECASE)
 _TYPE_PATTERN = re.compile(r"type\s*(?::|-)?\s*(.+)", re.IGNORECASE)
@@ -276,6 +303,12 @@ def is_command(text: str) -> bool:
         return True
     if _match_media_command(normalized):
         return True
+    if (
+        normalized in _GAMEBAR_RECORD_THAT_COMMANDS
+        or normalized in _GAMEBAR_START_RECORDING_COMMANDS
+        or normalized in _GAMEBAR_STOP_RECORDING_COMMANDS
+    ):
+        return True
     return False
 
 
@@ -298,6 +331,15 @@ def handle_command(text: str, logger=default_logger) -> str:
             _send_key_event(keycode)
             logger(f"Media command executed: {message}")
             return message
+        if normalized in _GAMEBAR_RECORD_THAT_COMMANDS:
+            result = gamebar_recorder.record_last_30_seconds(logger=logger)
+            return result["message"]
+        if normalized in _GAMEBAR_START_RECORDING_COMMANDS:
+            result = gamebar_recorder.start_recording(logger=logger)
+            return result["message"]
+        if normalized in _GAMEBAR_STOP_RECORDING_COMMANDS:
+            result = gamebar_recorder.stop_recording(logger=logger)
+            return result["message"]
         if normalized.startswith(_FILE_INDEX_PREFIXES):
             entries = file_indexer.build_file_index(logger=logger)
             count = len(entries)
@@ -374,13 +416,13 @@ def _launch_chrome(url: str) -> bool:
         path = Path(candidate)
         if not path.exists():
             continue
-        subprocess.Popen([str(path), url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        launch_detached([path, url])
         return True
     return False
 
 
 def _handle_open_notepad() -> str:
-    subprocess.Popen(["notepad.exe"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    launch_detached(["notepad.exe"])
     return "Opening Notepad."
 
 

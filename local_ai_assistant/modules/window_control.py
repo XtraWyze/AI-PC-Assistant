@@ -24,6 +24,7 @@ except ImportError:  # pragma: no cover - handled gracefully at runtime
     psutil = None  # type: ignore[assignment]
 
 from utils.logger import log
+from utils.processes import launch_detached
 
 APP_ALIASES: Dict[str, List[str]] = {
     "discord": ["discord", "discord.exe"],
@@ -333,12 +334,7 @@ def _launch_app(target_app: str) -> Tuple[bool, str]:
         if expanded.lower().endswith(".lnk"):
             os.startfile(expanded)  # type: ignore[attr-defined]
         else:
-            subprocess.Popen(
-                [expanded],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
+            launch_detached([expanded])
         return True, f"Launching {target_app.title()}..."
     except OSError as exc:
         return False, f"Failed to launch {target_app}: {exc}"

@@ -123,5 +123,28 @@
       },
       "required": ["action"]
     }
+  },
+  {
+    "name": "gamebar_capture",
+    "description": "Trigger Xbox Game Bar recording shortcuts (record last 30 seconds or start/stop capture).",
+    "module": "modules.gamebar_recorder",
+    "function": "handle_gamebar_action",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": "Capture action to perform.",
+          "enum": [
+            "record_last_30_seconds",
+            "record_that",
+            "start_recording",
+            "stop_recording",
+            "toggle_recording"
+          ]
+        }
+      },
+      "required": ["action"]
+    }
   }
 ]
