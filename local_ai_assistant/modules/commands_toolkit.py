@@ -529,3 +529,8 @@ def _load_pyautogui():
     except ImportError as exc:  # pragma: no cover - env specific
         raise RuntimeError("pyautogui is required. Please install dependencies first.") from exc
     return pyautogui
+
+
+def run_command(command: str, logger=default_logger) -> str:
+    """Tool-friendly alias that shares the handle_command implementation."""
+    return handle_command(command, logger=logger)

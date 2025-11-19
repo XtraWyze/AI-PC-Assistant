@@ -31,6 +31,18 @@ python assistant.py
 
 Press Enter to speak or type directly. Say "quit" or press `Ctrl+C` to exit.
 
+## Orchestrator + tool calling
+
+- `assistant.orchestrator.Orchestrator` now owns every LLM turn, including JSON tool-calling via the Ollama HTTP API.
+- Tool definitions live in `tools/tools_manifest.json`. Each entry specifies the module, function name, and JSON schema so the model can call it safely.
+- If your local Ollama build does not yet support chat tool-calling, set `ENABLE_LLM_TOOLS = False` in `config.py`; the orchestrator will automatically skip the `tools` payload and fall back to plain chat completions.
+- To add a new capability:
+	1. Implement a Python function (typically under `modules/`) that exposes the functionality you need.
+	2. Append a new object to `tools/tools_manifest.json` with the tool name, description, module path, callable name, and parameter schema.
+	3. Restart `assistant.py` so the orchestrator reloads the manifest.
+
+The orchestrator automatically handles routing, executing tools, and feeding tool responses back into the LLM, so the main loop stays lean.
+
 ## Built-in local commands
 
 These run instantly without the LLM:
@@ -42,12 +54,6 @@ These run instantly without the LLM:
 - `open browser`, `open chrome`, `open notepad`, `take screenshot`, and `type: ...` provide quick PC controls.
 
 Set `MERGE_COMMAND_RESPONSES=False` in `config.py` if you prefer instant local acknowledgements instead of routing the action summary back through the LLM.
-
-## Web search integration
-
-- Flip `USE_WEB_SEARCH` in `config.py` to enable/disable live lookups. When on, phrases such as `search climate stats` or `web: new python release` fetch DuckDuckGo HTML results and summarize them through the local Ollama model.
-- Tweak `SEARCH_PROVIDER`, `SEARCH_BASE_URL`, `SEARCH_MAX_RESULTS`, and `SEARCH_TIMEOUT_SECONDS` to point at an alternate provider or self-hosted proxy.
-- Dependencies: `requests` (already required) plus `beautifulsoup4` for lightweight HTML parsing. Install via `pip install -r requirements.txt` after pulling the latest repo state.
 
 ## Notes
 

@@ -25,26 +25,23 @@ SYSTEM_PREAMBLE = (
 )
 
 # ---------------------------------------------------------------------------
-# Optional web search integration
-# ---------------------------------------------------------------------------
-USE_WEB_SEARCH = True  # Allow the assistant to fetch live snippets when explicitly requested.
-SEARCH_PROVIDER = "duckduckgo"  # Currently supported: "duckduckgo".
-SEARCH_BASE_URL = "https://duckduckgo.com/html/"  # Override if you host a custom endpoint.
-SEARCH_MAX_RESULTS = 5  # Number of snippets to feed into the LLM summarizer.
-SEARCH_TIMEOUT_SECONDS = 8  # Keep remote calls short to avoid blocking the loop.
-
-# ---------------------------------------------------------------------------
 # LLM backend (Ollama) configuration
 # ---------------------------------------------------------------------------
-LLM_MODEL = "llama3"  # Name of an Ollama model that is already pulled locally.
+LLM_MODEL = "llama3.1:latest"  # Name of an Ollama model that is already pulled locally.
 OLLAMA_HOST = "http://localhost:11434"  # Where the Ollama daemon is listening.
+ENABLE_LLM_TOOLS = True  # Flip to False if your Ollama build doesn't support chat tool-calling yet.
 
 # ---------------------------------------------------------------------------
 # Speech subsystems (still optional if you want text-only usage)
 # ---------------------------------------------------------------------------
 USE_TTS = True  # Enable Text-To-Speech responses.
-USE_STT = True  # Enable speech recognition via Vosk.
-VOSK_MODEL_PATH = "models/vosk_model"  # Folder containing the downloaded Vosk model.
+USE_STT = True  # Enable speech recognition via Whisper.
+STT_ENGINE = "whisper"  # Future-proof selector in case alternative engines are added.
+WHISPER_MODEL = "small"  # Options include "tiny", "base", "small", "medium", "large-v2", etc.
+WHISPER_DEVICE = "auto"  # "auto" picks CUDA when available, else CPU.
+WHISPER_COMPUTE_TYPE = "auto"  # "auto" => float16 on GPU, int8 on CPU for speed.
+WHISPER_BEAM_SIZE = 5  # Trade-off between accuracy and latency.
+WHISPER_LANGUAGE = "en"  # ISO language hint or None to auto-detect.
 MAX_LISTEN_SECONDS = 10.0  # How long to listen after the user starts speaking.
 
 # Audio device overrides. Leave as None to allow sounddevice to auto-select defaults.

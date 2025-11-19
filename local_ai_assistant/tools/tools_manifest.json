@@ -1,0 +1,78 @@
+[
+  {
+    "name": "search_files",
+    "description": "Search the local file index for documents matching a natural language query.",
+    "module": "modules.file_search",
+    "function": "search_files",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "natural_query": {
+          "type": "string",
+          "description": "Natural language description of the files to locate."
+        },
+        "max_results": {
+          "type": "integer",
+          "description": "Maximum number of results to return (default 10).",
+          "minimum": 1,
+          "maximum": 50
+        }
+      },
+      "required": ["natural_query"]
+    }
+  },
+  {
+    "name": "run_command",
+    "description": "Execute a trusted local automation command (launch apps, control windows, manage audio).",
+    "module": "modules.commands_toolkit",
+    "function": "run_command",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "Spoken-style command such as 'open discord' or 'take screenshot'."
+        }
+      },
+      "required": ["command"]
+    }
+  },
+  {
+    "name": "build_file_index",
+    "description": "Scan allowed folders and refresh the on-disk file index.",
+    "module": "modules.file_indexer",
+    "function": "build_file_index",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "extra_paths": {
+          "type": "array",
+          "description": "Optional additional folders to include in the scan.",
+          "items": {"type": "string"}
+        },
+        "max_file_size_mb": {
+          "type": "integer",
+          "description": "Skip files larger than this size in megabytes (default 50).",
+          "minimum": 1,
+          "maximum": 500
+        }
+      }
+    }
+  },
+  {
+    "name": "search_memory",
+    "description": "Look up stored facts or history entries that mention a given topic.",
+    "module": "modules.memory_manager",
+    "function": "search_memory",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Keyword to match within memory facts and history."
+        }
+      },
+      "required": ["query"]
+    }
+  }
+]

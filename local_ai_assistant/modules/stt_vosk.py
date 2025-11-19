@@ -1,22 +1,32 @@
-"""Offline speech-to-text pipeline using Vosk."""
+"""Speech-to-text pipeline powered by Whisper (faster-whisper)."""
 from __future__ import annotations
 
-import os
 import queue
-import time
 import threading
+import time
 from typing import List, Optional
 
-import simplejson as json
+import numpy as np
 import sounddevice as sd
-from vosk import KaldiRecognizer, Model
+from faster_whisper import WhisperModel
 
 import config
 from utils.logger import log
 
+try:  # Torch is optional; only used for CUDA availability checks.
+    import torch
+
+    _TORCH_AVAILABLE = True
+except Exception:  # pragma: no cover - torch may be absent in lightweight installs
+    torch = None  # type: ignore
+    _TORCH_AVAILABLE = False
+
+
 _SAMPLERATE = 16_000
-_MODEL: Optional[Model] = None
-_RECOGNIZER: Optional[KaldiRecognizer] = None
+_SILENCE_TIMEOUT = 1.2
+_ENGINE_LOCK = threading.Lock()
+_ENGINE: Optional["WhisperSTTEngine"] = None
+_RECOGNIZER: Optional["WhisperSTTEngine"] = None  # Backwards compatibility for callers poking this attr
 
 
 def _normalize_phrases(phrases: List[str]) -> List[str]:
@@ -40,24 +50,112 @@ def _contains_interrupt_phrase(transcript: str, phrases: List[str]) -> bool:
     return False
 
 
-# Reminder: download a Vosk model (e.g., "vosk-model-en-us-0.22") and place its
-# extracted folder inside config.VOSK_MODEL_PATH. The folder should contain
-# "conf", "am", "graph", etc.
+def _pcm_bytes_to_float32(pcm_bytes: bytes) -> np.ndarray:
+    if not pcm_bytes:
+        return np.empty(0, dtype=np.float32)
+    samples = np.frombuffer(pcm_bytes, dtype=np.int16)
+    if samples.size == 0:
+        return np.empty(0, dtype=np.float32)
+    return samples.astype(np.float32) / 32768.0
 
-def init_recognizer() -> None:
-    """Load the Vosk model and prepare the recognizer."""
-    global _MODEL, _RECOGNIZER
-    model_path = config.VOSK_MODEL_PATH
-    if not os.path.isdir(model_path):
-        raise FileNotFoundError(
-            f"Vosk model not found at '{model_path}'. Download a model from https://alphacephei.com/vosk/models "
-            "and place it there."
+
+def _chunk_has_audio(pcm_bytes: bytes, threshold: int = 600) -> bool:
+    if not pcm_bytes:
+        return False
+    samples = np.frombuffer(pcm_bytes, dtype=np.int16)
+    if samples.size == 0:
+        return False
+    return np.max(np.abs(samples)) >= threshold
+
+
+class WhisperSTTEngine:
+    """Wrapper around faster-whisper that keeps configuration in one place."""
+
+    def __init__(
+        self,
+        model_name: Optional[str] = None,
+        device: Optional[str] = None,
+        compute_type: Optional[str] = None,
+        beam_size: Optional[int] = None,
+        language: Optional[str] = None,
+    ) -> None:
+        cfg = config
+        self.model_name = model_name or getattr(cfg, "WHISPER_MODEL", "small")
+        requested_device = (device or getattr(cfg, "WHISPER_DEVICE", "auto")).lower()
+        self.device = self._select_device(requested_device)
+        requested_compute = (compute_type or getattr(cfg, "WHISPER_COMPUTE_TYPE", "auto")).lower()
+        self.compute_type = self._select_compute_type(self.device, requested_compute)
+        self.beam_size = beam_size or int(getattr(cfg, "WHISPER_BEAM_SIZE", 5) or 5)
+        self.language = language or getattr(cfg, "WHISPER_LANGUAGE", "en") or None
+        self.temperature = 0.0
+
+        log(
+            f"Loading Whisper model '{self.model_name}' on {self.device} ({self.compute_type}, beam={self.beam_size})..."
         )
-    _MODEL = Model(model_path)
-    _RECOGNIZER = KaldiRecognizer(_MODEL, _SAMPLERATE)
+        self.model = WhisperModel(
+            self.model_name,
+            device=self.device,
+            compute_type=self.compute_type,
+        )
+        log("Whisper model ready.")
+
+    @staticmethod
+    def _select_device(requested: str) -> str:
+        if requested != "auto":
+            return requested
+        if _TORCH_AVAILABLE and torch.cuda.is_available():  # type: ignore[attr-defined]
+            return "cuda"
+        return "cpu"
+
+    @staticmethod
+    def _select_compute_type(device: str, requested: str) -> str:
+        if requested != "auto":
+            return requested
+        if device == "cpu":
+            return "int8"
+        return "float16"
+
+    def transcribe_bytes(self, pcm_bytes: bytes) -> str:
+        audio = _pcm_bytes_to_float32(pcm_bytes)
+        if audio.size == 0:
+            return ""
+        return self._run_transcription(audio)
+
+    def transcribe_file(self, audio_path: str) -> str:
+        return self._run_transcription(audio_path)
+
+    def _run_transcription(self, audio_source) -> str:
+        text_fragments: List[str] = []
+        segments, _ = self.model.transcribe(
+            audio_source,
+            beam_size=self.beam_size,
+            temperature=self.temperature,
+            language=self.language,
+        )
+        for segment in segments:
+            text_fragments.append(segment.text)
+        return "".join(text_fragments).strip()
 
 
-def _create_stream_queue() -> queue.Queue[bytes]:
+def init_recognizer(force_reload: bool = False) -> None:
+    """Initialize the shared Whisper engine (idempotent)."""
+    global _ENGINE, _RECOGNIZER
+    with _ENGINE_LOCK:
+        if _ENGINE is not None and not force_reload:
+            return
+        _ENGINE = WhisperSTTEngine()
+        _RECOGNIZER = _ENGINE
+
+
+def _ensure_engine() -> WhisperSTTEngine:
+    if _ENGINE is None:
+        init_recognizer()
+    if _ENGINE is None:  # pragma: no cover - defensive guard
+        raise RuntimeError("Whisper STT engine failed to initialize.")
+    return _ENGINE
+
+
+def _create_stream_queue(blocksize: int = 0) -> queue.Queue[bytes]:
     audio_queue: "queue.Queue[bytes]" = queue.Queue()
 
     def callback(indata, frames, time_info, status):  # pragma: no cover - hardware callback
@@ -65,150 +163,120 @@ def _create_stream_queue() -> queue.Queue[bytes]:
             log(f"sounddevice status: {status}")
         audio_queue.put(bytes(indata))
 
-    sd.default.samplerate = _SAMPLERATE
-    sd.default.channels = 1
-    sd.default.dtype = "int16"
-    if config.MIC_DEVICE_INDEX is not None:
-        sd.default.device = (config.MIC_DEVICE_INDEX, None)
-
-    stream = sd.RawInputStream(callback=callback)
+    stream = sd.RawInputStream(
+        samplerate=_SAMPLERATE,
+        channels=1,
+        dtype="int16",
+        callback=callback,
+        device=config.MIC_DEVICE_INDEX,
+        blocksize=blocksize,
+    )
     stream.start()
     audio_queue.stream = stream  # type: ignore[attr-defined]
     return audio_queue
 
 
-def listen_once(timeout_seconds: float = 10.0) -> str:
-    """Capture audio for up to timeout_seconds and return recognized text."""
-    if _RECOGNIZER is None:
-        log("Recognizer not initialized. Call init_recognizer() first.")
-        return ""
+def _capture_microphone_audio(
+    timeout_seconds: float,
+    silence_timeout: float = _SILENCE_TIMEOUT,
+    min_seconds: float = 0.4,
+) -> bytes:
+    timeout_seconds = max(timeout_seconds, 0.5)
+    silence_timeout = max(0.4, silence_timeout)
+    min_seconds = max(0.2, min_seconds)
 
     audio_queue = _create_stream_queue()
     stream = getattr(audio_queue, "stream")
-
+    buffer = bytearray()
     deadline = time.time() + timeout_seconds
-    transcript = ""
+    speech_started = False
+    last_voice_time = 0.0
+
     try:
         while time.time() < deadline:
             try:
-                data = audio_queue.get(timeout=0.2)
+                chunk = audio_queue.get(timeout=0.2)
             except queue.Empty:
                 continue
-            if _RECOGNIZER.AcceptWaveform(data):
-                result = json.loads(_RECOGNIZER.Result())
-                transcript = result.get("text", "")
+
+            buffer.extend(chunk)
+            if _chunk_has_audio(chunk):
+                speech_started = True
+                last_voice_time = time.time()
+            elif speech_started and (time.time() - last_voice_time) >= silence_timeout:
                 break
-        if not transcript:
-            final = json.loads(_RECOGNIZER.FinalResult())
-            transcript = final.get("text", "")
+
+        min_bytes = int(min_seconds * _SAMPLERATE) * 2
+        if len(buffer) < min_bytes and time.time() < deadline:
+            # Pad with additional audio to avoid overly short clips
+            while len(buffer) < min_bytes and time.time() < deadline:
+                try:
+                    buffer.extend(audio_queue.get(timeout=0.2))
+                except queue.Empty:
+                    break
     finally:
         stream.stop()
         stream.close()
 
-    return transcript.strip()
+    return bytes(buffer)
 
 
-def create_interrupt_recognizer() -> Optional[KaldiRecognizer]:
-    """Create a separate recognizer instance for interrupt detection."""
-    global _MODEL
-    if _MODEL is None:
-        model_path = config.VOSK_MODEL_PATH
-        if not os.path.isdir(model_path):
-            return None
-        _MODEL = Model(model_path)
-    return KaldiRecognizer(_MODEL, _SAMPLERATE)
+def listen_once(timeout_seconds: float = 10.0) -> str:
+    """Capture audio for up to timeout_seconds and return recognized text."""
+    engine = _ensure_engine()
+    pcm_bytes = _capture_microphone_audio(timeout_seconds=timeout_seconds)
+    if not pcm_bytes:
+        return ""
+    return engine.transcribe_bytes(pcm_bytes)
 
 
-def listen_for_interrupt(recognizer: KaldiRecognizer, interrupt_phrases: list, timeout_seconds: float = 0.5) -> bool:
+def create_interrupt_recognizer() -> Optional[WhisperSTTEngine]:
+    """Retained for compatibility with callers that expect a recognizer object."""
+    try:
+        return _ensure_engine()
+    except Exception:
+        return None
+
+
+def listen_for_interrupt(
+    recognizer,  # Unused but kept for backwards compatibility
+    interrupt_phrases: List[str],
+    timeout_seconds: float = 0.5,
+) -> bool:
     """Listen briefly for interrupt commands. Returns True if detected."""
+    _ = recognizer  # Preserve signature compatibility without relying on Vosk internals
     normalized = _normalize_phrases(interrupt_phrases)
-    audio_queue: "queue.Queue[bytes]" = queue.Queue()
-
-    def callback(indata, frames, time_info, status):  # pragma: no cover
-        if status:
-            # Silently ignore status messages during interrupt detection
-            pass
-        audio_queue.put(bytes(indata))
-
-    # Configure for simultaneous playback and recording
-    try:
-        stream = sd.RawInputStream(
-            samplerate=_SAMPLERATE,
-            channels=1,
-            dtype='int16',
-            callback=callback,
-            device=config.MIC_DEVICE_INDEX,
-            blocksize=4096  # Larger buffer for better stability
-        )
-        stream.start()
-    except Exception as e:
-        # Can't open stream - probably in use
+    if not normalized:
         return False
-    
-    deadline = time.time() + timeout_seconds
-    detected = False
-    
+
     try:
-        while time.time() < deadline and not detected:
-            try:
-                data = audio_queue.get(timeout=0.05)
-            except queue.Empty:
-                continue
-            
-            try:
-                if recognizer.AcceptWaveform(data):
-                    result = json.loads(recognizer.Result())
-                    transcript = result.get("text", "")
-                    if _contains_interrupt_phrase(transcript, normalized):
-                        detected = True
-                        break
-                else:
-                    partial = json.loads(recognizer.PartialResult()).get("partial", "")
-                    if _contains_interrupt_phrase(partial, normalized):
-                        detected = True
-                        break
-            except Exception:
-                # Ignore recognition errors
-                pass
-        
-        # Check partial result if nothing detected yet
-        if not detected:
-            try:
-                final = json.loads(recognizer.FinalResult())
-                transcript = final.get("text", "")
-                if _contains_interrupt_phrase(transcript, normalized):
-                    detected = True
-            except Exception:
-                pass
-    finally:
-        try:
-            stream.stop()
-            stream.close()
-        except Exception:
-            pass
-    
-    return detected
+        pcm_bytes = _capture_microphone_audio(timeout_seconds=timeout_seconds, silence_timeout=0.4, min_seconds=0.25)
+    except Exception:
+        return False
+
+    if not pcm_bytes:
+        return False
+
+    transcript = _ensure_engine().transcribe_bytes(pcm_bytes)
+    return _contains_interrupt_phrase(transcript, normalized)
 
 
 class VoiceInterruptDetector:
     """Persistent microphone stream for low-latency interruption detection."""
 
-    def __init__(self, interrupt_phrases: list[str], blocksize: int = 2048) -> None:
+    def __init__(self, interrupt_phrases: List[str], blocksize: int = 2048) -> None:
         normalized = _normalize_phrases(interrupt_phrases)
         if not normalized:
             raise ValueError("No interrupt phrases provided.")
 
-        recognizer = create_interrupt_recognizer()
-        if recognizer is None:
-            raise RuntimeError("Vosk model not initialized; call init_recognizer() first.")
-
+        self._engine = _ensure_engine()
         self._phrases = normalized
-        self._recognizer = recognizer
         self._queue: "queue.Queue[bytes]" = queue.Queue()
+        self._window_seconds = max(blocksize / _SAMPLERATE, 0.2) * 3
+        self._max_buffer_seconds = 2.0
 
         def callback(indata, frames, time_info, status):  # pragma: no cover - hardware callback
             if status:
-                # Avoid log spam here; interrupts run continuously.
                 pass
             self._queue.put(bytes(indata))
 
@@ -231,28 +299,6 @@ class VoiceInterruptDetector:
             pass
         self._drain_queue()
 
-    # Internal helpers --------------------------------------------------
-    def _process_chunk(self, data: bytes) -> bool:
-        try:
-            if self._recognizer.AcceptWaveform(data):
-                result = json.loads(self._recognizer.Result())
-                transcript = result.get("text", "")
-            else:
-                partial = json.loads(self._recognizer.PartialResult())
-                transcript = partial.get("partial", "")
-        except Exception:
-            return False
-
-        return _contains_interrupt_phrase(transcript, self._phrases)
-
-    def _process_final(self) -> bool:
-        try:
-            final = json.loads(self._recognizer.FinalResult())
-            transcript = final.get("text", "")
-        except Exception:
-            return False
-        return _contains_interrupt_phrase(transcript, self._phrases)
-
     def _drain_queue(self) -> None:
         while not self._queue.empty():
             try:
@@ -267,28 +313,66 @@ class VoiceInterruptDetector:
         idle_reset_seconds: float = 1.5,
     ) -> bool:
         """Continuously monitor the stream until interrupted or stop_event is set."""
-        poll_timeout = max(0.01, poll_timeout)
-        idle_reset_seconds = max(0.1, idle_reset_seconds)
-        detected = False
+        poll_timeout = max(0.02, poll_timeout)
+        idle_reset_seconds = max(0.3, idle_reset_seconds)
+        buffer = bytearray()
+        window_bytes = max(1, int(self._window_seconds * _SAMPLERATE) * 2)
+        max_bytes = max(window_bytes, int(self._max_buffer_seconds * _SAMPLERATE) * 2)
         last_audio = time.time()
 
         try:
-            while not detected:
+            while True:
                 if stop_event and stop_event.is_set():
-                    break
+                    return False
 
                 try:
-                    data = self._queue.get(timeout=poll_timeout)
+                    chunk = self._queue.get(timeout=poll_timeout)
                 except queue.Empty:
                     if time.time() - last_audio > idle_reset_seconds:
-                        self._recognizer.Reset()
+                        buffer.clear()
                         last_audio = time.time()
                     continue
 
-                last_audio = time.time()
-                detected = self._process_chunk(data)
+                buffer.extend(chunk)
+                if len(buffer) > max_bytes:
+                    del buffer[:-max_bytes]
+
+                if _chunk_has_audio(chunk):
+                    last_audio = time.time()
+
+                if len(buffer) < window_bytes:
+                    continue
+
+                if not _chunk_has_audio(buffer):
+                    buffer.clear()
+                    continue
+
+                transcript = self._engine.transcribe_bytes(bytes(buffer))
+                buffer.clear()
+                if _contains_interrupt_phrase(transcript, self._phrases):
+                    return True
         finally:
-            self._recognizer.Reset()
             self._drain_queue()
 
-        return detected
+
+if __name__ == "__main__":  # pragma: no cover - manual smoke test helper
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Manual Whisper STT test harness")
+    parser.add_argument("--file", help="Path to an audio file to transcribe", default="")
+    parser.add_argument("--timeout", type=float, default=10.0, help="Seconds to capture from microphone")
+    args = parser.parse_args()
+
+    init_recognizer()
+    engine = _ensure_engine()
+
+    if args.file:
+        result = engine.transcribe_file(args.file)
+        print(f"Transcription ({args.file}): {result}")
+    else:
+        print("Speak now...")
+        text = listen_once(timeout_seconds=args.timeout)
+        if text:
+            print(f"Heard: {text}")
+        else:
+            print("No speech recognized.")

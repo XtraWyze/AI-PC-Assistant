@@ -1,16 +1,18 @@
 """Main entry point for the local AI assistant loop."""
 from __future__ import annotations
 
+import os
 import queue
 import re
 import sys
 import threading
-from typing import Any, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from colorama import Fore, Style, init as colorama_init
 from pynput import keyboard
 
 import config
+from assistant.orchestrator import Orchestrator
 from modules import (
     commands_toolkit,
     conversation_manager,
@@ -19,12 +21,16 @@ from modules import (
     memory_manager,
     stt_vosk,
     tts_engine,
-    web_search,
 )
 from utils.logger import log
 
 
 colorama_init()
+
+_FORCE_TEXT_MODE = os.environ.get("WYZER_FORCE_TEXT_MODE", "").strip().lower() in {"1", "true", "yes", "text"}
+if _FORCE_TEXT_MODE:
+    config.MODE = "text"
+    config.ENABLE_HOTWORD = False
 
 # Global interrupt flag
 _interrupt_requested = threading.Event()
@@ -132,59 +138,68 @@ def _on_key_press(key):
         pass
 
 
-def initialize_subsystems() -> None:
-    """Initialize STT and TTS subsystems when enabled."""
-    if config.USE_STT:
-        try:
-            stt_vosk.init_recognizer()
-            log("Speech recognizer loaded.")
-        except Exception as exc:  # pragma: no cover - hardware specific
-            log(f"Failed to initialize STT: {exc}")
-            log("Continuing without speech input. Set USE_STT=False to silence this warning.")
-    if config.USE_TTS:
-        try:
-            tts_engine.init_tts()
-            log("TTS engine initialized.")
-        except Exception as exc:  # pragma: no cover - hardware specific
-            log(f"Failed to initialize TTS: {exc}")
-            log("Continuing without speech output. Set USE_TTS=False to silence this warning.")
-
-
-def print_startup_banner() -> None:
-    mode = config.MODE.lower()
-    log(
-        "Starting %s in %s mode (hotword=%s, commands=%s)."
-        % (
-            config.ASSISTANT_NAME,
-            mode,
-            "on" if config.ENABLE_HOTWORD else "off",
-            "on" if config.ENABLE_COMMANDS else "off",
-        )
-    )
-    if mode == "voice" and config.ENABLE_HOTWORD:
-        log(f"Say '{config.HOTWORD}' to wake the assistant.")
-    elif mode == "voice" and config.ENABLE_PUSH_TO_TALK:
-        log("Voice mode fallback: press ENTER to talk when prompted.")
-    
-    log(f"Press ESC to interrupt the assistant.")
-    log("Type 'quit' or 'exit' at any time to stop.")
-
-
-def _speak_text(text: str) -> None:
-    if not text or not config.USE_TTS:
-        return
-    try:
-        tts_engine.speak(text)
-    except Exception as exc:  # pragma: no cover - audio hardware
-        log(f"TTS playback failed: {exc}")
-
-
 def _capture_text_input() -> str:
     prompt = f"{Fore.CYAN}You>{Style.RESET_ALL} "
     try:
         return input(prompt).strip()
     except EOFError:
         return "quit"
+
+
+def _speak_text(text: str) -> None:
+    """Play a one-off TTS phrase with console fallback."""
+    message = (text or "").strip()
+    if not message:
+        return
+    print(f"{Fore.GREEN}{config.ASSISTANT_NAME}:{Style.RESET_ALL} {message}")
+    if not config.USE_TTS:
+        return
+    try:
+        tts_engine.speak(message)
+    except Exception as exc:  # pragma: no cover - device issues
+        log(f"Immediate TTS failed: {exc}")
+
+
+def initialize_subsystems() -> None:
+    """Warm up disk-backed stores and reset transient context."""
+    try:
+        memory_manager.load_memory()
+    except Exception as exc:  # pragma: no cover - file system issues
+        log(f"Memory initialization failed: {exc}")
+    try:
+        conversation_manager.clear_context()
+    except Exception as exc:  # pragma: no cover - defensive guard
+        log(f"Conversation manager reset failed: {exc}")
+    if getattr(config, "USE_TTS", False):
+        try:
+            tts_engine.init_tts()
+        except Exception as exc:  # pragma: no cover - device/dependency issues
+            log(f"TTS initialization failed: {exc}. Disabling USE_TTS for this session.")
+            config.USE_TTS = False
+    if getattr(config, "USE_STT", False):
+        try:
+            stt_vosk.init_recognizer()
+        except Exception as exc:  # pragma: no cover - missing model/hardware
+            log(f"STT initialization failed: {exc}. Disabling voice features for this session.")
+            config.USE_STT = False
+            config.ENABLE_HOTWORD = False
+            config.ENABLE_VOICE_INTERRUPTS = False
+
+
+def print_startup_banner() -> None:
+    """Display basic runtime instructions for the current mode."""
+    mode = getattr(config, "MODE", "voice").strip().lower()
+    print(f"{Fore.GREEN}{config.ASSISTANT_NAME}{Style.RESET_ALL} ready in {mode} mode.")
+    if mode == "text":
+        print("Type your request and press ENTER. Say 'quit' to exit.")
+        return
+    if getattr(config, "ENABLE_HOTWORD", False):
+        hotword = getattr(config, "HOTWORD", "Hey Wyzer")
+        print(f"Say '{hotword}' to wake the assistant, or type 'quit' to exit.")
+    elif getattr(config, "ENABLE_PUSH_TO_TALK", False):
+        print(getattr(config, "PUSH_TO_TALK_PROMPT", "Press ENTER and speak..."))
+    else:
+        print("Press ENTER when you want to speak.")
 
 
 def _capture_voice_input() -> str:
@@ -224,12 +239,6 @@ def _get_user_input() -> str:
 
 
 _SENTENCE_PATTERN = re.compile(r"(?<=[.!?\n])")
-_WEB_SEARCH_PREFIXES = ("search ", "google ", "look up ", "web:")
-_WEB_SEARCH_FAILURE_DIRECTIVE = (
-    "Web search was requested but unavailable. Begin your reply with "
-    '"I couldn\'t reach the internet, but here\'s what I know offline:" and '
-    "answer using only existing knowledge."
-)
 
 
 def _extract_complete_segments(buffer: str) -> Tuple[List[str], str]:
@@ -244,6 +253,30 @@ def _extract_complete_segments(buffer: str) -> Tuple[List[str], str]:
         start = end
     remainder = buffer[start:]
     return segments, remainder
+
+
+def _iter_tts_chunks(text: str, max_chunk_chars: int = 240) -> Iterable[str]:
+    """Yield trimmed chunks sized for low-latency speech playback."""
+    normalized = (text or "").replace("\r\n", "\n").strip()
+    if not normalized:
+        return
+
+    segments, remainder = _extract_complete_segments(normalized)
+    if remainder.strip():
+        segments.append(remainder.strip())
+
+    for segment in segments:
+        chunk = segment.replace("\n", " ").strip()
+        if not chunk:
+            continue
+        while len(chunk) > max_chunk_chars:
+            split_at = chunk.rfind(" ", 0, max_chunk_chars)
+            if split_at <= 0:
+                split_at = max_chunk_chars
+            yield chunk[:split_at].strip()
+            chunk = chunk[split_at:].strip()
+        if chunk:
+            yield chunk
 
 
 class TTSPipeline:
@@ -421,56 +454,124 @@ def stream_llm_reply(prompt: str) -> str:
 
 def _deliver_text_reply(text: str) -> None:
     print(f"{Fore.GREEN}{config.ASSISTANT_NAME}:{Style.RESET_ALL} {text}")
-    _speak_text(text)
+    if config.USE_TTS:
+        _play_reply_with_streaming_tts(text)
 
 
-def _extract_web_query(user_text: str) -> str:
-    """Return the stripped query once a search trigger is detected."""
-    lower = user_text.lower()
-    for prefix in _WEB_SEARCH_PREFIXES:
-        if lower.startswith(prefix):
-            return user_text[len(prefix) :].strip()
-    return ""
+def _stream_and_deliver_reply(
+    user_text: str,
+    orchestrator: Orchestrator,
+    conversation_state: List[Dict[str, str]],
+    *,
+    command_feedback: Optional[str] = None,
+    assistant_directive_override: Optional[str] = None,
+) -> str:
+    """Stream assistant output to console + TTS for low latency."""
+    tts_worker = TTSPipeline()
+    printed_any = False
+    header_printed = False
+    interrupted = False
+    buffer = ""
+
+    _interrupt_requested.clear()
+    _start_voice_interrupt_listener()
+
+    def _ensure_header() -> None:
+        nonlocal header_printed
+        if not header_printed:
+            print(f"{Fore.GREEN}{config.ASSISTANT_NAME}:{Style.RESET_ALL} ", end="", flush=True)
+            header_printed = True
+
+    def chunk_consumer(chunk: str) -> Optional[bool]:
+        nonlocal printed_any, buffer, interrupted
+        if not chunk:
+            return True
+        if _interrupt_requested.is_set():
+            interrupted = True
+            tts_worker.interrupt()
+            return False
+        _ensure_header()
+        printed_any = True
+        print(chunk, end="", flush=True)
+        buffer += chunk
+        completed, remainder = _extract_complete_segments(buffer)
+        buffer = remainder
+        for piece in completed:
+            tts_worker.enqueue(piece)
+        return True
+
+    def should_stop() -> bool:
+        return _interrupt_requested.is_set()
+
+    reply = ""
+    follow_up_used = False
+    try:
+        reply, follow_up_used = _process_user_query_streaming(
+            user_text,
+            orchestrator,
+            conversation_state,
+            chunk_consumer=chunk_consumer,
+            should_stop=should_stop,
+            command_feedback=command_feedback,
+            assistant_directive_override=assistant_directive_override,
+        )
+    finally:
+        interrupted = interrupted or _interrupt_requested.is_set()
+        # If we streamed chunks successfully, flush any leftover text
+        if not interrupted and buffer.strip():
+            tts_worker.enqueue(buffer.strip())
+        if printed_any or interrupted:
+            print(Style.RESET_ALL)
+        tts_worker.close()
+        _stop_voice_interrupt_listener()
+        _interrupt_requested.clear()
+
+    if interrupted:
+        print(f"{Fore.YELLOW}[Interrupted]{Style.RESET_ALL}")
+        return reply
+
+    if follow_up_used or not printed_any:
+        _ensure_header()
+        print(reply)
+        if config.USE_TTS:
+            _play_reply_with_streaming_tts(reply)
+
+    return reply
 
 
-def handle_web_search(user_text: str, cfg, *, query: Optional[str] = None) -> Optional[str]:
-    """Return an assistant directive that injects web search findings."""
-    actual_query = (query or _extract_web_query(user_text)).strip()
-    if not actual_query:
-        log("handle_web_search called without a valid query.")
-        return None
+def _play_reply_with_streaming_tts(text: str) -> None:
+    """Stream assistant replies through TTS with optional voice interrupts."""
+    content = (text or "").strip()
+    if not content or not config.USE_TTS:
+        return
 
-    log(f"Searching the web for: {actual_query}")
-    results = web_search.web_search(actual_query, num_results=getattr(cfg, "SEARCH_MAX_RESULTS", 5))
-    if not results:
-        return None
+    tts_worker = TTSPipeline()
+    _interrupt_requested.clear()
+    _start_voice_interrupt_listener()
 
-    formatted_chunks: List[str] = []
-    for idx, item in enumerate(results, start=1):
-        title = (item.get("title") or "Untitled").strip()
-        url = (item.get("url") or "Unknown URL").strip()
-        snippet = (item.get("snippet") or "").replace("\n", " ").strip()
-        if len(snippet) > 320:
-            snippet = f"{snippet[:317]}..."
-        formatted_chunks.append(f"{idx}. {title}\nURL: {url}\nSnippet: {snippet}")
+    try:
+        for chunk in _iter_tts_chunks(content):
+            if _interrupt_requested.is_set():
+                tts_worker.interrupt()
+                break
+            tts_worker.enqueue(chunk)
+    finally:
+        tts_worker.close()
+        _stop_voice_interrupt_listener()
+        _interrupt_requested.clear()
 
-    formatted_results = "\n\n".join(formatted_chunks)
-    directive = (
-        "Web search results for the latest user request are available. Use only these snippets as your source.\n"
-        f"Query: {actual_query}\n"
-        "Here are the hits (title, URL, snippet):\n"
-        f"{formatted_results}\n"
-        "Provide a concise answer in plain language, cite the top two or three URLs, and acknowledge uncertainty if the snippets are insufficient."
-    )
-    return directive
 
 
 def _process_user_query(
     user_text: str,
+    orchestrator: Orchestrator,
+    conversation_state: List[Dict[str, str]],
     command_feedback: Optional[str] = None,
     *,
     assistant_directive_override: Optional[str] = None,
-) -> None:
+) -> str:
+    """Persist conversation state and let the orchestrator handle the turn."""
+
     memory_manager.add_history_entry(user_text)
     memory_manager.set_fact("last_query", user_text)
     memory_manager.add_conversation_turn("user", user_text)
@@ -487,26 +588,103 @@ def _process_user_query(
         directive_parts.append(assistant_directive_override)
     directive = " ".join(directive_parts) if directive_parts else None
 
-    prompt = conversation_manager.build_prompt_with_context(
-        user_text,
-        system_preamble=getattr(config, "SYSTEM_PREAMBLE", None),
-        assistant_directive=directive,
-    )
-    reply = stream_llm_reply(prompt)
+    try:
+        response_message = orchestrator.route(
+            user_message=user_text,
+            conversation_state=conversation_state,
+            assistant_directive=directive,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        log(f"Orchestrator error: {exc}")
+        fallback = "I ran into a local orchestration error. Please try again."
+        conversation_state.append({"role": "assistant", "content": fallback})
+        conversation_manager.add_turn("assistant", fallback)
+        memory_manager.add_conversation_turn("assistant", fallback)
+        return fallback
+
+    reply = response_message.get("content", "") or "(No response from model.)"
     conversation_manager.add_turn("assistant", reply)
     memory_manager.add_conversation_turn("assistant", reply)
+    return reply
 
 
-def _hydrate_saved_conversation() -> None:
+def _process_user_query_streaming(
+    user_text: str,
+    orchestrator: Orchestrator,
+    conversation_state: List[Dict[str, str]],
+    chunk_consumer: Optional[Callable[[str], Optional[bool]]] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
+    command_feedback: Optional[str] = None,
+    *,
+    assistant_directive_override: Optional[str] = None,
+) -> Tuple[str, bool]:
+    """Stream assistant text while still updating memory + conversation."""
+
+    memory_manager.add_history_entry(user_text)
+    memory_manager.set_fact("last_query", user_text)
+    memory_manager.add_conversation_turn("user", user_text)
+    conversation_manager.add_turn("user", user_text)
+
+    directive_parts: List[str] = []
+    if command_feedback:
+        directive_parts.append(
+            "A trusted local automation command already executed in response to the latest user request. "
+            f"Command result: {command_feedback}. In your reply, briefly acknowledge the action and continue "
+            "helping the user without mentioning any separate subsystems."
+        )
+    if assistant_directive_override:
+        directive_parts.append(assistant_directive_override)
+    directive = " ".join(directive_parts) if directive_parts else None
+
+    try:
+        response_message, follow_up_used = orchestrator.stream_route(
+            user_message=user_text,
+            conversation_state=conversation_state,
+            assistant_directive=directive,
+            on_text_chunk=chunk_consumer,
+            should_stop=should_stop,
+        )
+    except Exception as exc:
+        log(f"Orchestrator streaming error: {exc}")
+        fallback = "I ran into a local orchestration error while streaming. Please try again."
+        conversation_state.append({"role": "assistant", "content": fallback})
+        conversation_manager.add_turn("assistant", fallback)
+        memory_manager.add_conversation_turn("assistant", fallback)
+        return fallback, False
+
+    reply = response_message.get("content", "") or "(No response from model.)"
+    conversation_manager.add_turn("assistant", reply)
+    memory_manager.add_conversation_turn("assistant", reply)
+    return reply, follow_up_used
+
+
+def _hydrate_saved_conversation(orchestrator: Optional[Orchestrator] = None) -> List[Dict[str, str]]:
+    """Return conversation state seeded with the stored history + system prompt."""
+    conversation_state: List[Dict[str, str]] = []
+    system_preamble = getattr(config, "SYSTEM_PREAMBLE", None)
+    if orchestrator:
+        orchestrator.set_system_prompt(system_preamble)
+    if system_preamble:
+        conversation_state.append({"role": "system", "content": system_preamble.strip()})
+
     limit = max(1, getattr(config, "MAX_CONTEXT_TURNS", 6) * 2)
     for turn in memory_manager.get_recent_turns(limit=limit):
-        conversation_manager.add_turn(turn.get("role", ""), turn.get("text", ""))
+        role = (turn.get("role") or "").strip().lower()
+        text = (turn.get("text") or "").strip()
+        if role not in {"user", "assistant"} or not text:
+            continue
+        conversation_manager.add_turn(role, text)
+        conversation_state.append({"role": role, "content": text})
+
+    return conversation_state
 
 
 def main() -> None:
     initialize_subsystems()
     print_startup_banner()
-    _hydrate_saved_conversation()
+    orchestrator = Orchestrator()
+    orchestrator.load_tools()
+    conversation_state = _hydrate_saved_conversation(orchestrator)
     
     # Start keyboard listener for interrupts
     listener = keyboard.Listener(on_press=_on_key_press)
@@ -526,36 +704,40 @@ def main() -> None:
             if config.ENABLE_COMMANDS and commands_toolkit.is_command(cleaned):
                 reply = commands_toolkit.handle_command(cleaned, log)
                 if getattr(config, "MERGE_COMMAND_RESPONSES", False):
-                    _process_user_query(cleaned, command_feedback=reply)
+                    if config.USE_TTS:
+                        assistant_reply = _stream_and_deliver_reply(
+                            cleaned,
+                            orchestrator,
+                            conversation_state,
+                            command_feedback=reply,
+                        )
+                    else:
+                        assistant_reply = _process_user_query(
+                            cleaned,
+                            orchestrator,
+                            conversation_state,
+                            command_feedback=reply,
+                        )
+                        _deliver_text_reply(assistant_reply)
                 else:
                     print(f"{config.ASSISTANT_NAME}: {reply}")
                     if config.USE_TTS:
-                        tts_engine.speak(reply)
+                        _play_reply_with_streaming_tts(reply)
                 continue
 
-            search_query = _extract_web_query(cleaned)
-            if search_query:
-                if config.USE_WEB_SEARCH:
-                    directive = handle_web_search(cleaned, config, query=search_query)
-                    if directive:
-                        _process_user_query(
-                            cleaned,
-                            assistant_directive_override=directive,
-                        )
-                        continue
-                    log("Web search failed; falling back to offline answer.")
-                    _process_user_query(
-                        cleaned,
-                        assistant_directive_override=_WEB_SEARCH_FAILURE_DIRECTIVE,
-                    )
-                    continue
-                log("Web search request received but USE_WEB_SEARCH=False.")
-                _process_user_query(
+            if config.USE_TTS:
+                assistant_reply = _stream_and_deliver_reply(
                     cleaned,
-                    assistant_directive_override=_WEB_SEARCH_FAILURE_DIRECTIVE,
+                    orchestrator,
+                    conversation_state,
                 )
-                continue
-            _process_user_query(cleaned)
+            else:
+                assistant_reply = _process_user_query(
+                    cleaned,
+                    orchestrator,
+                    conversation_state,
+                )
+                _deliver_text_reply(assistant_reply)
         except KeyboardInterrupt:
             print("\n")
             log("Keyboard interrupt received. Goodbye!")
