@@ -167,5 +167,132 @@
       },
       "required": ["url"]
     }
+  },
+  {
+    "name": "get_time_date",
+    "description": "Retrieve the current local time, ISO date, and weekday.",
+    "module": "modules.tools.get_time_date",
+    "function": "get_time_date",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "get_location",
+    "description": "Fetch the user's general location (city/region/country) and coordinates via ipinfo.io.",
+    "module": "modules.tools.get_location",
+    "function": "get_location",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "get_weather",
+    "description": "Retrieve the current weather from Open-Meteo (returns both Celsius and Fahrenheit) for provided or auto-detected coordinates.",
+    "module": "modules.tools.get_weather",
+    "function": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "lat": {
+          "type": "number",
+          "description": "Latitude in decimal degrees. Optional when the assistant should auto-detect location."
+        },
+        "lon": {
+          "type": "number",
+          "description": "Longitude in decimal degrees. Optional when the assistant should auto-detect location."
+        }
+      }
+    }
+  },
+  {
+    "name": "get_sunrise_sunset",
+    "description": "Get today's sunrise and sunset times for specific coordinates.",
+    "module": "modules.tools.get_weather",
+    "function": "get_sunrise_sunset",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "lat": {
+          "type": "number",
+          "description": "Latitude in decimal degrees. Optional when the assistant should auto-detect location."
+        },
+        "lon": {
+          "type": "number",
+          "description": "Longitude in decimal degrees. Optional when the assistant should auto-detect location."
+        }
+      }
+    }
+  },
+  {
+    "name": "get_forecast",
+    "description": "Fetch a short multi-day weather forecast including min/max temperature and summary.",
+    "module": "modules.tools.get_weather",
+    "function": "get_forecast",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "lat": {
+          "type": "number",
+          "description": "Latitude in decimal degrees. Optional when the assistant should auto-detect location."
+        },
+        "lon": {
+          "type": "number",
+          "description": "Longitude in decimal degrees. Optional when the assistant should auto-detect location."
+        },
+        "days": {
+          "type": "integer",
+          "description": "Number of days to include (default 3, maximum 7).",
+          "minimum": 1,
+          "maximum": 7
+        }
+      }
+    }
+  },
+  {
+    "name": "get_air_quality",
+    "description": "Retrieve the most recent US AQI reading and pollutant levels.",
+    "module": "modules.tools.get_weather",
+    "function": "get_air_quality",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "lat": {
+          "type": "number",
+          "description": "Latitude in decimal degrees. Optional when the assistant should auto-detect location."
+        },
+        "lon": {
+          "type": "number",
+          "description": "Longitude in decimal degrees. Optional when the assistant should auto-detect location."
+        }
+      }
+    }
+  },
+  {
+    "name": "get_environment_overview",
+    "description": "Combine current weather, sun times, forecast, air quality, and simple alerts for a location.",
+    "module": "modules.tools.get_weather",
+    "function": "get_environment_overview",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "lat": {
+          "type": "number",
+          "description": "Latitude in decimal degrees. Optional when the assistant should auto-detect location."
+        },
+        "lon": {
+          "type": "number",
+          "description": "Longitude in decimal degrees. Optional when the assistant should auto-detect location."
+        },
+        "days": {
+          "type": "integer",
+          "description": "Number of forecast days to include when summarizing (default 3, maximum 7).",
+          "minimum": 1,
+          "maximum": 7
+        }
+      }
+    }
   }
 ]

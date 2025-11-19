@@ -35,7 +35,18 @@ SYSTEM_PREAMBLE = (
     "When reporting window_control results, keep the acknowledgement extremely brief (<=8 words), no extra commentary/log output, just the outcome (e.g., 'Discord minimized.'). "
     "You can open websites on the user's computer using the open_website tool. "
     "When the user says things like 'open Facebook on Chrome', 'go to YouTube', or 'open Twitch in my browser', call open_website with a full https:// URL and optionally set browser='chrome' or 'default'. "
-    "Examples: 'open facebook on chrome' -> open_website(url='https://www.facebook.com', browser='chrome'); 'go to youtube' -> open_website(url='https://www.youtube.com')."
+    "Examples: 'open facebook on chrome' -> open_website(url='https://www.facebook.com', browser='chrome'); 'go to youtube' -> open_website(url='https://www.youtube.com'). "
+    "You have access to advanced environment tools:\n"
+    "- get_time_date(): retrieve the current local time/date.\n"
+    "- get_location(): retrieve the user's general location using IP.\n"
+    "- get_weather(lat, lon): current temperature, wind, humidity, and a short description.\n"
+    "- get_sunrise_sunset(lat, lon): today's sunrise and sunset times.\n"
+    "- get_forecast(lat, lon, days): short multi-day forecast with min/max temperature and summary.\n"
+    "- get_air_quality(lat, lon): current AQI and pollutant levels.\n"
+    "- get_environment_overview(lat, lon, days): combined view of current weather, sun info, forecast, air quality, and simple alerts.\n"
+    "If the user asks about whether it's safe to go outside, if they need a jacket, sunrise or sunset, humidity or how it feels outside, air quality or breathing safety, or what the next few days' weather will be like, call the appropriate tools. "
+    "Typically run get_location() first when coordinates are missing, then call the weather tool with those lat/lon values. "
+    "Report temperatures in Fahrenheit by default (include Celsius only when specifically requested)."
 )
 
 # ---------------------------------------------------------------------------

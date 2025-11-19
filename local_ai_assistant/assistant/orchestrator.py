@@ -19,6 +19,14 @@ STATIC_TOOL_BINDINGS: Dict[str, ToolCallable] = {
     "open_website": open_website,
 }
 
+WEATHER_COORDINATE_TOOLS = {
+    "get_weather",
+    "get_sunrise_sunset",
+    "get_forecast",
+    "get_air_quality",
+    "get_environment_overview",
+}
+
 
 class Orchestrator:
     """Coordinates LLM calls, tool execution, and conversation state."""
@@ -174,12 +182,56 @@ class Orchestrator:
         if not record:
             return {"status": "error", "error": f"Unknown tool '{tool_name}'."}
         func: ToolCallable = record["callable"]
+        payload = dict(arguments or {})
+        if tool_name in WEATHER_COORDINATE_TOOLS:
+            payload = self._ensure_weather_coordinates(payload)
         try:
-            result = func(**(arguments or {}))
+            result = func(**payload)
             return {"status": "success", "result": result}
         except Exception as exc:  # pragma: no cover - tool safety net
             log(f"Tool '{tool_name}' failed: {exc}")
             return {"status": "error", "error": str(exc)}
+
+    def _ensure_weather_coordinates(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Auto-fetch coordinates when the LLM omits them for environment tools."""
+        def _is_missing(value: Any) -> bool:
+            if value is None:
+                return True
+            if isinstance(value, str) and not value.strip():
+                return True
+            return False
+
+        lat_missing = _is_missing(arguments.get("lat"))
+        lon_missing = _is_missing(arguments.get("lon"))
+        if not (lat_missing or lon_missing):
+            return arguments
+
+        location = self._call_location_tool_internal()
+        if not location:
+            return arguments
+
+        if lat_missing and location.get("lat") is not None:
+            arguments["lat"] = location.get("lat")
+        if lon_missing and location.get("lon") is not None:
+            arguments["lon"] = location.get("lon")
+        return arguments
+
+    def _call_location_tool_internal(self) -> Optional[Dict[str, Any]]:
+        """Invoke the get_location tool without surfacing a visible tool call."""
+        record = self.tools_registry.get("get_location")
+        if not record:
+            log("get_weather requested coordinates but get_location is unavailable.")
+            return None
+        func: ToolCallable = record["callable"]
+        try:
+            result = func()
+        except Exception as exc:  # pragma: no cover - tool safety net
+            log(f"Internal get_location call failed: {exc}")
+            return None
+        if isinstance(result, dict):
+            return result
+        log("get_location returned a non-dict payload; ignoring result.")
+        return None
 
     def route(
         self,
