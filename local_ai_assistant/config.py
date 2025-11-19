@@ -11,7 +11,7 @@ ASSISTANT_NAME = "Wyzer"  # Display name + how the assistant introduces itself.
 MODE = "voice"  # "voice" for hotword+STT loop, "text" for console input.
 ENABLE_HOTWORD = True  # Disable to fall back to push-to-talk for voice mode.
 HOTWORD = "hey wyzer"  # Phrase the hotword detector should listen for.
-HOTWORD_TIMEOUT_SECONDS = 45.0  # Stop waiting for a wake word after this many seconds (None = unlimited).
+HOTWORD_TIMEOUT_SECONDS = None  # Stop waiting for a wake word after this many seconds (None = unlimited).
 HOTWORD_ALIASES = ["wyzer"]  # Additional phrases treated as wake words.
 HOTWORD_HIDDEN_ALIASES = ["wiser", "hey wiser", "computer"]  # Extra wake phrases kept out of console logs.
 HOTWORD_STREAMING = True  # Keep an always-on low-latency listener alive instead of polling in 3s chunks.
