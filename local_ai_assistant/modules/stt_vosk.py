@@ -4,7 +4,7 @@ from __future__ import annotations
 import queue
 import threading
 import time
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import numpy as np
 import sounddevice as sd
@@ -180,12 +180,13 @@ def _capture_microphone_audio(
     timeout_seconds: float,
     silence_timeout: float = _SILENCE_TIMEOUT,
     min_seconds: float = 0.4,
+    blocksize: int = 0,
 ) -> bytes:
     timeout_seconds = max(timeout_seconds, 0.5)
     silence_timeout = max(0.4, silence_timeout)
     min_seconds = max(0.2, min_seconds)
 
-    audio_queue = _create_stream_queue()
+    audio_queue = _create_stream_queue(blocksize=blocksize)
     stream = getattr(audio_queue, "stream")
     buffer = bytearray()
     deadline = time.time() + timeout_seconds
@@ -274,10 +275,23 @@ def _capture_follow_up_audio(
         stream.close()
 
 
-def listen_once(timeout_seconds: float = 10.0) -> str:
+def listen_once(
+    timeout_seconds: float = 10.0,
+    *,
+    silence_timeout: Optional[float] = None,
+    min_seconds: Optional[float] = None,
+    blocksize: int = 0,
+) -> str:
     """Capture audio for up to timeout_seconds and return recognized text."""
     engine = _ensure_engine()
-    pcm_bytes = _capture_microphone_audio(timeout_seconds=timeout_seconds)
+    silence = silence_timeout if silence_timeout is not None else _SILENCE_TIMEOUT
+    minimum = min_seconds if min_seconds is not None else 0.4
+    pcm_bytes = _capture_microphone_audio(
+        timeout_seconds=timeout_seconds,
+        silence_timeout=silence,
+        min_seconds=minimum,
+        blocksize=blocksize,
+    )
     if not pcm_bytes:
         return ""
     return engine.transcribe_bytes(pcm_bytes)
@@ -331,7 +345,12 @@ def listen_for_interrupt(
 class VoiceInterruptDetector:
     """Persistent microphone stream for low-latency interruption detection."""
 
-    def __init__(self, interrupt_phrases: List[str], blocksize: int = 2048) -> None:
+    def __init__(
+        self,
+        interrupt_phrases: List[str],
+        blocksize: int = 2048,
+        match_predicate: Optional[Callable[[str], bool]] = None,
+    ) -> None:
         normalized = _normalize_phrases(interrupt_phrases)
         if not normalized:
             raise ValueError("No interrupt phrases provided.")
@@ -341,6 +360,7 @@ class VoiceInterruptDetector:
         self._queue: "queue.Queue[bytes]" = queue.Queue()
         self._window_seconds = max(blocksize / _SAMPLERATE, 0.2) * 3
         self._max_buffer_seconds = 2.0
+        self._match_predicate = match_predicate
 
         def callback(indata, frames, time_info, status):  # pragma: no cover - hardware callback
             if status:
@@ -378,6 +398,7 @@ class VoiceInterruptDetector:
         stop_event: Optional[threading.Event] = None,
         poll_timeout: float = 0.05,
         idle_reset_seconds: float = 1.5,
+        timeout_seconds: Optional[float] = None,
     ) -> bool:
         """Continuously monitor the stream until interrupted or stop_event is set."""
         poll_timeout = max(0.02, poll_timeout)
@@ -386,9 +407,16 @@ class VoiceInterruptDetector:
         window_bytes = max(1, int(self._window_seconds * _SAMPLERATE) * 2)
         max_bytes = max(window_bytes, int(self._max_buffer_seconds * _SAMPLERATE) * 2)
         last_audio = time.time()
+        if timeout_seconds is not None:
+            timeout_seconds = max(0.0, float(timeout_seconds))
+            if timeout_seconds == 0:
+                return False
+        start_time = time.time()
 
         try:
             while True:
+                if timeout_seconds is not None and (time.time() - start_time) >= timeout_seconds:
+                    return False
                 if stop_event and stop_event.is_set():
                     return False
 
@@ -416,6 +444,12 @@ class VoiceInterruptDetector:
 
                 transcript = self._engine.transcribe_bytes(bytes(buffer))
                 buffer.clear()
+                if not transcript:
+                    continue
+                if self._match_predicate:
+                    if self._match_predicate(transcript):
+                        return True
+                    continue
                 if _contains_interrupt_phrase(transcript, self._phrases):
                     return True
         finally:

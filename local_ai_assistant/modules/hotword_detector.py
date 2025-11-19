@@ -77,6 +77,75 @@ def _get_hotword_phrases(cfg) -> tuple[list[str], list[str]]:
     return visible, hidden
 
 
+def _listen_with_streaming(
+    phrases: list[str],
+    poll_interval: float,
+    blocksize: int,
+    idle_reset_seconds: float,
+    threshold: float,
+    deadline: Optional[float],
+    stop_event: Optional[threading.Event],
+    logger=default_logger,
+) -> Optional[bool]:
+    """Attempt a single streaming hotword listen cycle. Returns None if unavailable."""
+
+    def matcher(transcript: str) -> bool:
+        cleaned = transcript.strip()
+        if not cleaned:
+            return False
+        logger(f"Heard: '{cleaned}'")
+        for phrase in phrases:
+            if _fuzzy_match(cleaned, phrase, logger=logger, threshold=threshold):
+                logger(f"Hotword detected ({phrase}).")
+                return True
+        return False
+
+    try:
+        detector = stt_vosk.VoiceInterruptDetector(
+            phrases,
+            blocksize=blocksize,
+            match_predicate=matcher,
+        )
+    except Exception as exc:
+        logger(f"Streaming hotword listener unavailable: {exc}")
+        return None
+
+    try:
+        timeout_seconds = None
+        if deadline is not None:
+            remaining = max(0.0, deadline - time.time())
+            if remaining == 0:
+                logger("Hotword listen timed out.")
+                return False
+            timeout_seconds = remaining
+
+        detected = detector.listen_continuous(
+            stop_event=stop_event,
+            poll_timeout=poll_interval,
+            idle_reset_seconds=idle_reset_seconds,
+            timeout_seconds=timeout_seconds,
+        )
+    except Exception as exc:
+        logger(f"Streaming hotword listener error: {exc}")
+        return None
+    finally:
+        detector.close()
+
+    if detected:
+        return True
+
+    if stop_event and stop_event.is_set():
+        logger("Hotword listener stopped by request.")
+        return False
+
+    if deadline is not None and time.time() >= deadline:
+        logger("Hotword listen timed out.")
+        return False
+
+    logger("Streaming hotword listener exited unexpectedly; falling back to polling mode.")
+    return None
+
+
 def listen_for_hotword(
     config_module=None,
     logger=default_logger,
@@ -107,7 +176,30 @@ def listen_for_hotword(
         logger(f"Listening for hotword(s) {readable}...")
     else:
         logger("Listening for configured hotword(s)...")
-    poll_interval = max(0.05, float(poll_interval))
+    poll_interval = max(0.02, float(poll_interval))
+
+    threshold = float(getattr(cfg, "HOTWORD_MATCH_THRESHOLD", 0.62) or 0.62)
+    blocksize = max(256, int(getattr(cfg, "HOTWORD_STREAM_BLOCKSIZE", 2048) or 2048))
+    idle_reset_seconds = max(0.3, float(getattr(cfg, "HOTWORD_IDLE_RESET_SECONDS", 0.9) or 0.9))
+    passive_window = max(0.8, float(getattr(cfg, "HOTWORD_PASSIVE_LISTEN_SECONDS", 1.6) or 1.6))
+    silence_timeout = max(0.25, float(getattr(cfg, "HOTWORD_SILENCE_TIMEOUT", 0.45) or 0.45))
+    min_phrase_seconds = max(0.2, float(getattr(cfg, "HOTWORD_MIN_PHRASE_SECONDS", 0.35) or 0.35))
+
+    if getattr(cfg, "HOTWORD_STREAMING", True):
+        streaming_result = _listen_with_streaming(
+            phrases,
+            poll_interval=poll_interval,
+            blocksize=blocksize,
+            idle_reset_seconds=idle_reset_seconds,
+            threshold=threshold,
+            deadline=deadline,
+            stop_event=stop_event,
+            logger=logger,
+        )
+        if streaming_result is not None:
+            return streaming_result
+
+        logger("Falling back to legacy hotword polling loop.")
 
     while True:
         if stop_event and stop_event.is_set():
@@ -117,13 +209,18 @@ def listen_for_hotword(
             logger("Hotword listen timed out.")
             return False
 
-        transcript = stt_vosk.listen_once(timeout_seconds=3.0)
+        transcript = stt_vosk.listen_once(
+            timeout_seconds=passive_window,
+            silence_timeout=silence_timeout,
+            min_seconds=min_phrase_seconds,
+            blocksize=blocksize,
+        )
         if stop_event and stop_event.is_set():
             return False
         if transcript:
             logger(f"Heard: '{transcript}'")
             for phrase in phrases:
-                if _fuzzy_match(transcript, phrase, logger=logger, threshold=0.65):
+                if _fuzzy_match(transcript, phrase, logger=logger, threshold=threshold):
                     logger(f"Hotword detected ({phrase}).")
                     return True
         if stop_event:

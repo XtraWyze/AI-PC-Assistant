@@ -31,6 +31,13 @@ python assistant.py
 
 Press Enter to speak or type directly. Say "quit" or press `Ctrl+C` to exit.
 
+### Hotword tuning
+
+- `HOTWORD_STREAMING` keeps a continuous low-latency listener alive so "Hey Wyzer" is picked up instantly.
+- `HOTWORD_MATCH_THRESHOLD`, `HOTWORD_SILENCE_TIMEOUT`, and `HOTWORD_MIN_PHRASE_SECONDS` let you trade accuracy for responsiveness.
+- `HOTWORD_PASSIVE_LISTEN_SECONDS` controls the legacy polling fallback window if streaming stops (for example, when the mic is already in use).
+- `HOTWORD_STREAM_BLOCKSIZE` and `HOTWORD_IDLE_RESET_SECONDS` adjust CPU usage vs. reaction speed for the background listener.
+
 ## Orchestrator + tool calling
 
 - `assistant.orchestrator.Orchestrator` now owns every LLM turn, including JSON tool-calling via the Ollama HTTP API.

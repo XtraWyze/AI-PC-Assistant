@@ -14,6 +14,13 @@ HOTWORD = "hey wyzer"  # Phrase the hotword detector should listen for.
 HOTWORD_TIMEOUT_SECONDS = 45.0  # Stop waiting for a wake word after this many seconds (None = unlimited).
 HOTWORD_ALIASES = ["wyzer"]  # Additional phrases treated as wake words.
 HOTWORD_HIDDEN_ALIASES = ["wiser", "hey wiser", "computer"]  # Extra wake phrases kept out of console logs.
+HOTWORD_STREAMING = True  # Keep an always-on low-latency listener alive instead of polling in 3s chunks.
+HOTWORD_STREAM_BLOCKSIZE = 2048  # Larger block sizes reduce CPU load; smaller values lower latency.
+HOTWORD_IDLE_RESET_SECONDS = 0.9  # How fast the streaming buffer resets when no speech is present.
+HOTWORD_PASSIVE_LISTEN_SECONDS = 1.6  # Window length for the legacy polling fallback.
+HOTWORD_SILENCE_TIMEOUT = 0.45  # How quickly to stop recording after the hotword is spoken.
+HOTWORD_MIN_PHRASE_SECONDS = 0.35  # Minimum audio capture length to pass to Whisper.
+HOTWORD_MATCH_THRESHOLD = 0.62  # Lower values make fuzzy matching more permissive; raises recall at the cost of precision.
 ENABLE_PUSH_TO_TALK = False  # Optional fallback while hotword is disabled/unavailable.
 PUSH_TO_TALK_PROMPT = "Press ENTER and speak..."  # Shown in console for text fallback prompting.
 ENABLE_COMMANDS = True  # Route built-in PC-control commands locally instead of sending to the LLM.
