@@ -13,7 +13,7 @@ ENABLE_HOTWORD = True  # Disable to fall back to push-to-talk for voice mode.
 HOTWORD = "hey wyzer"  # Phrase the hotword detector should listen for.
 HOTWORD_TIMEOUT_SECONDS = 45.0  # Stop waiting for a wake word after this many seconds (None = unlimited).
 HOTWORD_ALIASES = ["wyzer"]  # Additional phrases treated as wake words.
-HOTWORD_HIDDEN_ALIASES = ["wiser", "hey wiser"]  # Extra wake phrases kept out of console logs.
+HOTWORD_HIDDEN_ALIASES = ["wiser", "hey wiser", "computer"]  # Extra wake phrases kept out of console logs.
 ENABLE_PUSH_TO_TALK = False  # Optional fallback while hotword is disabled/unavailable.
 PUSH_TO_TALK_PROMPT = "Press ENTER and speak..."  # Shown in console for text fallback prompting.
 ENABLE_COMMANDS = True  # Route built-in PC-control commands locally instead of sending to the LLM.
@@ -47,6 +47,7 @@ WHISPER_COMPUTE_TYPE = "auto"  # "auto" => float16 on GPU, int8 on CPU for speed
 WHISPER_BEAM_SIZE = 5  # Trade-off between accuracy and latency.
 WHISPER_LANGUAGE = "en"  # ISO language hint or None to auto-detect.
 MAX_LISTEN_SECONDS = 10.0  # How long to listen after the user starts speaking.
+FOLLOW_UP_WINDOW_SECONDS = 3.0  # After TTS playback, auto-listen this long for a follow-up before requiring a wake word.
 
 # Audio device overrides. Leave as None to allow sounddevice to auto-select defaults.
 VOICE_DEVICE_INDEX = None  # Playback device index for TTS audio.

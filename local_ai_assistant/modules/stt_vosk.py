@@ -221,10 +221,77 @@ def _capture_microphone_audio(
     return bytes(buffer)
 
 
+def _capture_follow_up_audio(
+    wait_seconds: float,
+    listen_seconds: float,
+    silence_timeout: float = _SILENCE_TIMEOUT,
+) -> bytes:
+    wait_seconds = max(wait_seconds, 0.5)
+    listen_seconds = max(listen_seconds, 0.5)
+    silence_timeout = max(0.3, silence_timeout)
+
+    audio_queue = _create_stream_queue()
+    stream = getattr(audio_queue, "stream")
+    buffer = bytearray()
+    wait_deadline = time.time() + wait_seconds
+    overall_deadline = wait_deadline + listen_seconds
+    speech_started = False
+    last_voice_time = 0.0
+
+    try:
+        while True:
+            active_deadline = overall_deadline if speech_started else wait_deadline
+            if time.time() > active_deadline:
+                break
+
+            try:
+                chunk = audio_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+
+            if not chunk:
+                continue
+
+            if not speech_started:
+                if _chunk_has_audio(chunk):
+                    speech_started = True
+                    last_voice_time = time.time()
+                    buffer.extend(chunk)
+                continue
+
+            buffer.extend(chunk)
+            if _chunk_has_audio(chunk):
+                last_voice_time = time.time()
+            elif time.time() - last_voice_time >= silence_timeout:
+                break
+
+        min_bytes = int(0.25 * _SAMPLERATE) * 2
+        if len(buffer) < min_bytes:
+            return b""
+        return bytes(buffer)
+    finally:
+        stream.stop()
+        stream.close()
+
+
 def listen_once(timeout_seconds: float = 10.0) -> str:
     """Capture audio for up to timeout_seconds and return recognized text."""
     engine = _ensure_engine()
     pcm_bytes = _capture_microphone_audio(timeout_seconds=timeout_seconds)
+    if not pcm_bytes:
+        return ""
+    return engine.transcribe_bytes(pcm_bytes)
+
+
+def listen_follow_up(wait_seconds: float, max_listen_seconds: Optional[float] = None) -> str:
+    """Listen briefly for a follow-up utterance without requiring a wake word."""
+    wait_seconds = max(0.0, wait_seconds)
+    if wait_seconds <= 0:
+        return ""
+
+    engine = _ensure_engine()
+    listen_budget = max_listen_seconds if max_listen_seconds is not None else getattr(config, "MAX_LISTEN_SECONDS", 10.0)
+    pcm_bytes = _capture_follow_up_audio(wait_seconds=wait_seconds, listen_seconds=listen_budget)
     if not pcm_bytes:
         return ""
     return engine.transcribe_bytes(pcm_bytes)

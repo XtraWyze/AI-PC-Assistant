@@ -561,6 +561,29 @@ def _play_reply_with_streaming_tts(text: str) -> None:
         _interrupt_requested.clear()
 
 
+def _listen_for_follow_up_query() -> str:
+    """Give the user a brief post-reply window to ask another question."""
+    if getattr(config, "MODE", "voice").lower() != "voice":
+        return ""
+    if not (config.USE_TTS and config.USE_STT):
+        return ""
+    window = float(getattr(config, "FOLLOW_UP_WINDOW_SECONDS", 0.0) or 0.0)
+    if window <= 0:
+        return ""
+
+    try:
+        log(f"Listening up to {window:.1f}s for a quick follow-up...")
+        heard = stt_vosk.listen_follow_up(window, getattr(config, "MAX_LISTEN_SECONDS", 10.0))
+    except Exception as exc:
+        log(f"Follow-up listener error: {exc}")
+        return ""
+
+    text = heard.strip()
+    if text:
+        log(f"Follow-up heard: {text}")
+    return text
+
+
 
 def _process_user_query(
     user_text: str,
@@ -685,6 +708,7 @@ def main() -> None:
     orchestrator = Orchestrator()
     orchestrator.load_tools()
     conversation_state = _hydrate_saved_conversation(orchestrator)
+    pending_follow_up: Optional[str] = None
     
     # Start keyboard listener for interrupts
     listener = keyboard.Listener(on_press=_on_key_press)
@@ -692,7 +716,11 @@ def main() -> None:
 
     while True:
         try:
-            user_text = _get_user_input()
+            if pending_follow_up:
+                user_text = pending_follow_up
+                pending_follow_up = None
+            else:
+                user_text = _get_user_input()
             cleaned = user_text.strip()
             if not cleaned:
                 continue
@@ -711,6 +739,9 @@ def main() -> None:
                             conversation_state,
                             command_feedback=reply,
                         )
+                        follow_up = _listen_for_follow_up_query()
+                        if follow_up:
+                            pending_follow_up = follow_up
                     else:
                         assistant_reply = _process_user_query(
                             cleaned,
@@ -723,6 +754,9 @@ def main() -> None:
                     print(f"{config.ASSISTANT_NAME}: {reply}")
                     if config.USE_TTS:
                         _play_reply_with_streaming_tts(reply)
+                        follow_up = _listen_for_follow_up_query()
+                        if follow_up:
+                            pending_follow_up = follow_up
                 continue
 
             if config.USE_TTS:
@@ -731,6 +765,9 @@ def main() -> None:
                     orchestrator,
                     conversation_state,
                 )
+                follow_up = _listen_for_follow_up_query()
+                if follow_up:
+                    pending_follow_up = follow_up
             else:
                 assistant_reply = _process_user_query(
                     cleaned,
