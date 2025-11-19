@@ -86,12 +86,10 @@ def _should_require_price(query: str) -> bool:
 def _capture_numeric_tokens(query: str) -> List[str]:
     tokens: List[str] = []
     parts = [part.strip(".,") for part in query.lower().split() if part.strip()]
-    for idx, part in enumerate(parts):
+    for part in parts:
         if any(ch.isdigit() for ch in part):
             tokens.append(part)
-            if idx > 0 and not any(ch.isdigit() for ch in parts[idx - 1]):
-                tokens.append(f"{parts[idx - 1]} {part}".strip())
-    return [token for token in tokens if token]
+    return tokens
 
 
 def _extract_visible_text(html: str) -> str:
