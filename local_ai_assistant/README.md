@@ -1,68 +1,56 @@
 # Local AI Assistant
 
-Offline-first voice assistant that runs entirely on Windows using local models:
-
-- **Speech-to-Text** via Vosk + sounddevice
-- **LLM** via Ollama (defaults to `llama3`)
-- **Text-to-Speech** via Coqui TTS with pyttsx3 fallback
+Offline-first console assistant that runs entirely on Windows using a locally hosted Ollama model. Audio input/output and GUI shells have been removed—everything happens inside the terminal for faster, simpler workflows.
 
 ## Setup
 
-1. Install system dependencies (Python 3.10+, Ollama, a Vosk acoustic model, microphone/headset drivers).
-2. Download a Vosk model from <https://alphacephei.com/vosk/models> and extract it into `models/vosk_model/`.
-3. (Optional) Pull an Ollama model: `ollama pull llama3`.
+1. Install Python 3.10+ and [Ollama](https://ollama.ai/) on Windows.
+2. (Optional) Pull your preferred Ollama model, e.g. `ollama pull llama3`.
+3. Create a virtual environment and install dependencies:
 
 ```powershell
 cd local_ai_assistant
 python -m venv .venv
-.\.venv\Scripts\activate
+\.\.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
 ## Usage
 
-1. Ensure the Vosk model folder exists and Ollama is running.
-2. Adjust `config.py` if you want different models/devices.
+1. Ensure Ollama is running.
+2. Adjust `config.py` if you want to change the default model or tool behavior.
 3. Start the assistant loop:
 
 ```powershell
 python assistant.py
 ```
 
-Press Enter to speak or type directly. Say "quit" or press `Ctrl+C` to exit.
-
-### Hotword tuning
-
-- `HOTWORD_STREAMING` keeps a continuous low-latency listener alive so "Hey Wyzer" is picked up instantly.
-- `HOTWORD_MATCH_THRESHOLD`, `HOTWORD_SILENCE_TIMEOUT`, and `HOTWORD_MIN_PHRASE_SECONDS` let you trade accuracy for responsiveness.
-- `HOTWORD_PASSIVE_LISTEN_SECONDS` controls the legacy polling fallback window if streaming stops (for example, when the mic is already in use).
-- `HOTWORD_STREAM_BLOCKSIZE` and `HOTWORD_IDLE_RESET_SECONDS` adjust CPU usage vs. reaction speed for the background listener.
+Type requests directly into the console and press ENTER. Type `quit` (or press `Ctrl+C`) to exit.
 
 ## Orchestrator + tool calling
 
-- `assistant.orchestrator.Orchestrator` now owns every LLM turn, including JSON tool-calling via the Ollama HTTP API.
+- `assistant.orchestrator.Orchestrator` owns every LLM turn, including JSON tool-calling through the Ollama HTTP API.
 - Tool definitions live in `tools/tools_manifest.json`. Each entry specifies the module, function name, and JSON schema so the model can call it safely.
-- If your local Ollama build does not yet support chat tool-calling, set `ENABLE_LLM_TOOLS = False` in `config.py`; the orchestrator will automatically skip the `tools` payload and fall back to plain chat completions.
-- To add a new capability:
-	1. Implement a Python function (typically under `modules/`) that exposes the functionality you need.
-	2. Append a new object to `tools/tools_manifest.json` with the tool name, description, module path, callable name, and parameter schema.
+- If your Ollama build does not yet support chat tool-calling, set `ENABLE_LLM_TOOLS = False` in `config.py`; the orchestrator will automatically fall back to plain chat completions.
+- To add a capability:
+	1. Implement a Python function (usually under `modules/`).
+	2. Append a manifest entry with the tool name, module path, callable, description, and parameter schema.
 	3. Restart `assistant.py` so the orchestrator reloads the manifest.
 
-The orchestrator automatically handles routing, executing tools, and feeding tool responses back into the LLM, so the main loop stays lean.
+The orchestrator streams text chunks straight to the terminal, so responses start appearing immediately even for longer answers.
 
 ### Window / app control tool
 
 - `modules/window_control.py` exposes `handle_window_control(action, target_app=None, monitor=None)` for focus/minimize/maximize/restore/move.
-- The manifest entry is named `window_control`; the LLM calls it with actions like `"switch"`, `"bring_up"`, `"minimize"`, `"move"`, etc.
-- Spoken app names are normalized using `APP_ALIASES`, and the module can fall back to launching an app via `APP_LAUNCH_MAP` when no window is found.
-- To move windows between monitors, pass action `"move"` (or `"move_to_monitor"`) plus a `monitor` hint (e.g., `"left"`, `"right"`, `"primary"`, or `"monitor 2"`). The module keeps window size reasonable for the new display.
-- Extend the alias, launch map, or monitor hint handling to cover additional setups.
+- The manifest entry `window_control` receives actions like `"switch"`, `"bring_up"`, `"minimize"`, `"move"`, etc.
+- Window aliases (`APP_ALIASES`) and `APP_LAUNCH_MAP` help map natural language requests to running apps or launch commands.
+- For multi-monitor setups, pass action `"move"` (or `"move_to_monitor"`) plus a monitor hint like `"left"`, `"right"`, or `"monitor 2"`.
 
-### Voice typing control tool
+### Typing automation tool
 
-- `modules/voice_typing.py` now exposes `control_voice_typing(action, text=None)` so the LLM can enable/disable dictation, check status, or inject keystrokes on demand.
-- The manifest entry `voice_typing_control` accepts `action` values `enable`, `disable`, `toggle`, `status`, or `type`; provide `text` only when action is `type`.
-- Results include whether typing mode is currently enabled plus metadata such as backend readiness or the number of characters typed, giving the model clear feedback.
+- `modules/voice_typing.py` exposes `control_voice_typing(action, text=None)` so the LLM can toggle dictation mode or issue keystrokes via pyautogui when the user asks it to "type this" or "press Ctrl+C".
+- The `voice_typing_control` manifest entry accepts actions `enable`, `disable`, `toggle`, `status`, or `type`; provide `text` only for the `type` action.
+- Results include whether typing mode is enabled plus metadata such as backend readiness or characters typed so the model can confirm what happened.
 
 ### Xbox Game Bar capture tool
 
@@ -74,20 +62,18 @@ The orchestrator automatically handles routing, executing tools, and feeding too
 
 These run instantly without the LLM:
 
-- `scan apps` / `list apps` keeps the executable registry up to date.
+- `scan apps` / `list apps` refreshes the executable registry.
 - `open <app>` or `launch <app>` starts any indexed application.
 - `close <app>` issues a Windows `taskkill` for the target process (falls back to `<name>.exe` if the app isn't indexed).
 - `open folder <path>` opens a directory in Explorer.
 - `open browser`, `open chrome`, `open notepad`, `take screenshot`, and `type: ...` provide quick PC controls.
-- `record that`, `start recording this`, and `stop recording` forward to Xbox Game Bar hotkeys so you can capture highlights hands-free.
+- `record that`, `start recording this`, and `stop recording` forward to Xbox Game Bar hotkeys for highlight capture.
 
 Set `MERGE_COMMAND_RESPONSES=False` in `config.py` if you prefer instant local acknowledgements instead of routing the action summary back through the LLM.
 
 ## Notes
 
-- Toggle `USE_STT`/`USE_TTS` in `config.py` to disable audio subsystems.
-- Voice interrupts are enabled by default—say "stop" or "cancel" while TTS is speaking to cut it off (`ENABLE_VOICE_INTERRUPTS`).
-- In the Wyzer Chat GUI you can also click the **Stop** button (or press `Esc`) to cancel the current reply; voice phrases use the same interrupt hook when TTS is enabled.
-- The interrupt listener keeps the microphone stream open at all times for near-zero latency; disable the feature entirely if you need to reclaim the input device.
-- `data/memory.json` stores lightweight key/value context.
+- The assistant is text-only; no microphones, hotwords, or TTS pipelines are required.
+- `ENABLE_VOICE_TYPING` governs whether the `voice_typing_control` tool is available for keystroke automation.
+- `data/memory.json` stores lightweight key/value context. Delete it to reset history.
 - Logs can optionally be written to `logs/assistant.log` via `utils/logger.py`.
