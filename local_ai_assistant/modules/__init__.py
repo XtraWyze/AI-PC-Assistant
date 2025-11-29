@@ -2,8 +2,10 @@
 
 __all__ = [
     "llm_engine",
+    "stt_vosk",
+    "tts_engine",
     "memory_manager",
     "conversation_manager",
     "commands_toolkit",
-    "voice_typing",
+    "hotword_detector",
 ]
