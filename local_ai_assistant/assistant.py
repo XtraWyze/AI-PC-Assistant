@@ -5,6 +5,7 @@ import os
 import queue
 import sys
 import threading
+import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from colorama import Fore, Style, init as colorama_init
@@ -38,6 +39,231 @@ _interrupt_key = config.INTERRUPT_KEY if hasattr(config, 'INTERRUPT_KEY') else '
 _voice_listener_running = False
 _voice_listener_thread: Optional[threading.Thread] = None
 _voice_listener_stop_event: Optional[threading.Event] = None
+
+_HOTKEY_TOKEN_ALIASES: Dict[str, str] = {
+    "control": "ctrl",
+    "ctl": "ctrl",
+    "option": "alt",
+    "command": "win",
+    "windows": "win",
+    "win": "win",
+    "super": "win",
+    "meta": "win",
+    "cmd": "win",
+    "spacebar": "space",
+}
+
+_SPECIAL_KEY_TOKENS: Dict[Any, str] = {
+    keyboard.Key.alt: "alt",
+    keyboard.Key.alt_l: "alt",
+    keyboard.Key.alt_r: "alt",
+    keyboard.Key.alt_gr: "alt",
+    keyboard.Key.ctrl: "ctrl",
+    keyboard.Key.ctrl_l: "ctrl",
+    keyboard.Key.ctrl_r: "ctrl",
+    keyboard.Key.shift: "shift",
+    keyboard.Key.shift_l: "shift",
+    keyboard.Key.shift_r: "shift",
+    keyboard.Key.cmd: "win",
+    keyboard.Key.cmd_l: "win",
+    keyboard.Key.cmd_r: "win",
+    keyboard.Key.space: "space",
+    keyboard.Key.enter: "enter",
+    keyboard.Key.tab: "tab",
+    keyboard.Key.esc: "esc",
+    keyboard.Key.backspace: "backspace",
+    keyboard.Key.delete: "delete",
+    keyboard.Key.home: "home",
+    keyboard.Key.end: "end",
+    keyboard.Key.page_up: "pageup",
+    keyboard.Key.page_down: "pagedown",
+    keyboard.Key.up: "up",
+    keyboard.Key.down: "down",
+    keyboard.Key.left: "left",
+    keyboard.Key.right: "right",
+}
+
+for idx in range(1, 25):
+    key_obj = getattr(keyboard.Key, f"f{idx}", None)
+    if key_obj:
+        _SPECIAL_KEY_TOKENS[key_obj] = f"f{idx}"
+
+
+def _normalize_hotkey_token(token: str) -> Optional[str]:
+    cleaned = (token or "").strip().lower()
+    if not cleaned:
+        return None
+    return _HOTKEY_TOKEN_ALIASES.get(cleaned, cleaned)
+
+
+def _parse_hotkey_config(value: str) -> List[str]:
+    tokens: List[str] = []
+    for part in (value or "").split("+"):
+        normalized = _normalize_hotkey_token(part)
+        if normalized:
+            tokens.append(normalized)
+    return tokens
+
+
+def _wake_hotkey_details() -> Tuple[bool, List[str]]:
+    tokens = _parse_hotkey_config(getattr(config, "WAKE_HOTKEY", ""))
+    enabled = bool(tokens) and bool(getattr(config, "ENABLE_WAKE_HOTKEY", False))
+    return enabled, tokens
+
+
+def _format_hotkey_display(tokens: List[str]) -> str:
+    pretty_map = {
+        "ctrl": "Ctrl",
+        "alt": "Alt",
+        "shift": "Shift",
+        "win": "Win",
+        "space": "Space",
+        "enter": "Enter",
+        "tab": "Tab",
+    }
+    parts: List[str] = []
+    for token in tokens:
+        parts.append(pretty_map.get(token, token.upper() if len(token) == 1 else token.capitalize()))
+    return "+".join(parts)
+
+
+def _key_to_hotkey_token(key: Any) -> Optional[str]:
+    mapped = _SPECIAL_KEY_TOKENS.get(key)
+    if mapped:
+        return mapped
+    if isinstance(key, keyboard.KeyCode):
+        if key.char:
+            return key.char.lower()
+        if key.vk is not None:
+            if 48 <= key.vk <= 57:  # Top-row digits
+                return str(key.vk - 48)
+            if 96 <= key.vk <= 105:  # Numpad digits
+                return str(key.vk - 96)
+    return None
+
+
+def _wait_for_hotkey_combo(
+    tokens: List[str],
+    stop_event: threading.Event,
+    timeout: Optional[float],
+) -> bool:
+    if not tokens:
+        return False
+
+    triggered = threading.Event()
+    active: set[str] = set()
+
+    def on_press(key: Any) -> Optional[bool]:
+        if stop_event.is_set():
+            return False
+        token = _key_to_hotkey_token(key)
+        if not token:
+            return None
+        active.add(token)
+        if all(part in active for part in tokens):
+            triggered.set()
+            return False
+        return None
+
+    def on_release(key: Any) -> Optional[bool]:
+        token = _key_to_hotkey_token(key)
+        if token and token in active:
+            active.remove(token)
+        if stop_event.is_set():
+            return False
+        return None
+
+    try:
+        listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+        listener.start()
+    except Exception as exc:  # pragma: no cover - hardware/OS specific
+        log(f"Wake hotkey listener unavailable: {exc}")
+        return False
+
+    try:
+        if timeout is None:
+            while not triggered.is_set() and not stop_event.is_set() and listener.is_alive():
+                triggered.wait(timeout=0.1)
+        else:
+            deadline = time.time() + timeout
+            while not triggered.is_set() and not stop_event.is_set() and listener.is_alive():
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                triggered.wait(timeout=min(0.1, remaining))
+    finally:
+        try:
+            listener.stop()
+        except Exception:
+            pass
+        listener.join(timeout=0.2)
+
+    return triggered.is_set()
+
+
+def _await_wake_signal() -> Optional[str]:
+    hotword_enabled = bool(getattr(config, "ENABLE_HOTWORD", False)) and bool(getattr(config, "USE_STT", False))
+    hotkey_enabled, hotkey_tokens = _wake_hotkey_details()
+
+    if not hotword_enabled and not hotkey_enabled:
+        if getattr(config, "ENABLE_PUSH_TO_TALK", False):
+            input(getattr(config, "PUSH_TO_TALK_PROMPT", "Press ENTER and speak..."))
+        else:
+            input("Press ENTER when you want to speak...")
+        return "manual"
+
+    timeout = getattr(config, "HOTWORD_TIMEOUT_SECONDS", None)
+    stop_event = threading.Event()
+    result_ready = threading.Event()
+    result_lock = threading.Lock()
+    winner: Dict[str, Optional[str]] = {"reason": None}
+
+    def _set_winner(reason: str) -> None:
+        if not reason:
+            return
+        with result_lock:
+            if winner["reason"] is None:
+                winner["reason"] = reason
+                stop_event.set()
+                result_ready.set()
+
+    threads: List[threading.Thread] = []
+
+    if hotword_enabled:
+        def _hotword_worker() -> None:
+            detected = hotword_detector.listen_for_hotword(
+                config_module=config,
+                logger=log,
+                timeout_seconds=timeout,
+                stop_event=stop_event,
+            )
+            if detected:
+                _set_winner("hotword")
+
+        threads.append(threading.Thread(target=_hotword_worker, daemon=True))
+
+    if hotkey_enabled:
+        def _hotkey_worker() -> None:
+            triggered = _wait_for_hotkey_combo(hotkey_tokens, stop_event=stop_event, timeout=timeout)
+            if triggered:
+                _set_winner("hotkey")
+
+        threads.append(threading.Thread(target=_hotkey_worker, daemon=True))
+
+    for thread in threads:
+        thread.start()
+
+    if timeout is None:
+        while not result_ready.is_set() and any(thread.is_alive() for thread in threads):
+            time.sleep(0.1)
+    else:
+        if not result_ready.wait(timeout):
+            stop_event.set()
+
+    for thread in threads:
+        thread.join(timeout=0.1)
+
+    return winner["reason"]
 
 
 def _voice_interrupt_listener(stop_event: threading.Event) -> None:
@@ -193,9 +419,16 @@ def print_startup_banner() -> None:
     if mode == "text":
         print("Type your request and press ENTER. Say 'quit' to exit.")
         return
+    hotkey_enabled, hotkey_tokens = _wake_hotkey_details()
+    instructions: List[str] = []
     if getattr(config, "ENABLE_HOTWORD", False):
         hotword = getattr(config, "HOTWORD", "Hey Wyzer")
-        print(f"Say '{hotword}' to wake the assistant, or type 'quit' to exit.")
+        instructions.append(f"Say '{hotword}'")
+    if hotkey_enabled:
+        instructions.append(f"Press {_format_hotkey_display(hotkey_tokens)}")
+    if instructions:
+        joined = " or ".join(instructions)
+        print(f"{joined} to wake the assistant, or type 'quit' to exit.")
     elif getattr(config, "ENABLE_PUSH_TO_TALK", False):
         print(getattr(config, "PUSH_TO_TALK_PROMPT", "Press ENTER and speak..."))
     else:
@@ -207,20 +440,12 @@ def _capture_voice_input() -> str:
         log("Voice mode requires USE_STT=True. Falling back to empty input.")
         return ""
 
-    if config.ENABLE_HOTWORD:
-        detected = hotword_detector.listen_for_hotword(
-            config_module=config,
-            logger=log,
-            timeout_seconds=getattr(config, "HOTWORD_TIMEOUT_SECONDS", None),
-        )
-        if not detected:
-            return ""
+    activation_source = _await_wake_signal()
+    if not activation_source:
+        log("Wake hotword/hotkey listener exited without activation.")
+        return ""
+    if activation_source in {"hotword", "hotkey"}:
         _speak_text("I'm listening.")
-    else:
-        if config.ENABLE_PUSH_TO_TALK:
-            input(config.PUSH_TO_TALK_PROMPT)
-        else:
-            input("Press ENTER to speak...")
 
     log("Listening for your query...")
     text = stt_vosk.listen_once(timeout_seconds=config.MAX_LISTEN_SECONDS)

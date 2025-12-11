@@ -37,6 +37,7 @@ Press Enter to speak or type directly. Say "quit" or press `Ctrl+C` to exit.
 - `HOTWORD_MATCH_THRESHOLD`, `HOTWORD_SILENCE_TIMEOUT`, and `HOTWORD_MIN_PHRASE_SECONDS` let you trade accuracy for responsiveness.
 - `HOTWORD_PASSIVE_LISTEN_SECONDS` controls the legacy polling fallback window if streaming stops (for example, when the mic is already in use).
 - `HOTWORD_STREAM_BLOCKSIZE` and `HOTWORD_IDLE_RESET_SECONDS` adjust CPU usage vs. reaction speed for the background listener.
+- `ENABLE_WAKE_HOTKEY` + `WAKE_HOTKEY` let you pair a keyboard shortcut (for example `ctrl+space`) with the hotword listener so either input wakes Wyzer.
 
 ## Orchestrator + tool calling
 

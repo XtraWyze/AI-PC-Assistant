@@ -10,6 +10,8 @@ your preferred models, devices, and runtime defaults.
 ASSISTANT_NAME = "Wyzer"  # Display name + how the assistant introduces itself.
 MODE = "voice"  # "voice" for hotword+STT loop, "text" for console input.
 ENABLE_HOTWORD = True  # Disable to fall back to push-to-talk for voice mode.
+ENABLE_WAKE_HOTKEY = True  # Listen for the WAKE_HOTKEY shortcut alongside the hotword listener.
+WAKE_HOTKEY = "ctrl+space"  # Keyboard shortcut that immediately starts listening (set to "" to disable).
 HOTWORD = "hey wyzer"  # Phrase the hotword detector should listen for.
 HOTWORD_TIMEOUT_SECONDS = None  # Stop waiting for a wake word after this many seconds (None = unlimited).
 HOTWORD_ALIASES = ["wyzer"]  # Additional phrases treated as wake words.
