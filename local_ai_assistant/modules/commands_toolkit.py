@@ -289,7 +289,9 @@ def _send_key_event(keycode: int) -> None:
 
 
 def _normalize(text: str) -> str:
-    return text.strip().lower()
+    # Strip whitespace and punctuation, then lowercase
+    cleaned = text.strip().rstrip('.,!?;:')
+    return cleaned.lower()
 
 
 def is_command(text: str) -> bool:
@@ -329,7 +331,8 @@ def handle_command(text: str, logger=default_logger) -> str:
     if not text:
         return "I didn't catch any command."
 
-    cleaned = text.strip()
+    # Normalize by stripping whitespace and trailing punctuation
+    cleaned = text.strip().rstrip('.,!?;:')
     normalized = cleaned.lower()
     logger(f"Handling local command: {text}")
 
@@ -352,6 +355,12 @@ def handle_command(text: str, logger=default_logger) -> str:
         if normalized in _GAMEBAR_STOP_RECORDING_COMMANDS:
             result = gamebar_recorder.stop_recording(logger=logger)
             return result["message"]
+        # Check exact matches for app commands BEFORE prefix matches for file commands
+        if normalized in _SCAN_COMMANDS:
+            return _handle_scan_apps(logger=logger)
+        if normalized in _LIST_COMMANDS:
+            return _handle_list_apps()
+        # Now check file-related commands with prefix matching
         if normalized.startswith(_FILE_INDEX_PREFIXES):
             entries = file_indexer.build_file_index(logger=logger)
             count = len(entries)
@@ -365,10 +374,6 @@ def handle_command(text: str, logger=default_logger) -> str:
             console_str = file_search.format_search_results_for_console(results)
             print(console_str)
             return file_search.format_search_results_for_speech(results)
-        if normalized in _SCAN_COMMANDS:
-            return _handle_scan_apps(logger=logger)
-        if normalized in _LIST_COMMANDS:
-            return _handle_list_apps()
         if normalized in {"open browser", "open chrome"}:
             return _handle_open_browser(prefer_chrome="chrome" in normalized)
         if normalized == "open notepad":
