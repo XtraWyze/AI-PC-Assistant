@@ -39,6 +39,13 @@ Press Enter to speak or type directly. Say "quit" or press `Ctrl+C` to exit.
 - `HOTWORD_STREAM_BLOCKSIZE` and `HOTWORD_IDLE_RESET_SECONDS` adjust CPU usage vs. reaction speed for the background listener.
 - `ENABLE_WAKE_HOTKEY` + `WAKE_HOTKEY` let you pair a keyboard shortcut (for example `ctrl+space`) with the hotword listener so either input wakes Wyzer.
 
+### Noise suppression
+
+- `NOISE_SUPPRESSION_ENABLED` toggles audio noise reduction for cleaner hotword detection and speech recognition.
+- `NOISE_SUPPRESSION_STATIONARY` assumes background noise is constant (e.g., fan, AC); set to `False` for variable noise.
+- `NOISE_SUPPRESSION_STRENGTH` controls reduction intensity (0.0-1.0); 1.0 removes maximum noise, lower values preserve more original audio.
+- Noise suppression uses the `noisereduce` library and applies automatically to all audio input when enabled.
+
 ## Orchestrator + tool calling
 
 - `assistant.orchestrator.Orchestrator` now owns every LLM turn, including JSON tool-calling via the Ollama HTTP API.

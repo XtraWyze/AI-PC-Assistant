@@ -86,6 +86,11 @@ WHISPER_LANGUAGE = "en"  # ISO language hint or None to auto-detect.
 MAX_LISTEN_SECONDS = 10.0  # How long to listen after the user starts speaking.
 FOLLOW_UP_WINDOW_SECONDS = 3.0  # After TTS playback, auto-listen this long for a follow-up before requiring a wake word.
 
+# Noise suppression for improved hotword detection and STT
+NOISE_SUPPRESSION_ENABLED = True  # Enable noise reduction on audio input.
+NOISE_SUPPRESSION_STATIONARY = True  # Assume stationary noise (more aggressive); set False for dynamic noise.
+NOISE_SUPPRESSION_STRENGTH = 1.0  # Proportion of noise to reduce (0.0-1.0); 1.0 = maximum reduction.
+
 # Audio device overrides. Leave as None to allow sounddevice to auto-select defaults.
 VOICE_DEVICE_INDEX = None  # Playback device index for TTS audio.
 MIC_DEVICE_INDEX = None  # Recording device index for STT input.
@@ -99,6 +104,34 @@ VOICE_INTERRUPT_PHRASES = [
     "pause",
     "quiet",
 ]
+
+# ---------------------------------------------------------------------------
+# New openWakeWord-based hotword detection settings
+# ---------------------------------------------------------------------------
+# Use openWakeWord for real keyword spotting instead of Whisper-as-hotword
+HOTWORD_ENGINE = "openwakeword"  # Engine type: "openwakeword" (recommended) or "legacy"
+HOTWORD_KEYWORDS = ["hey jarvis"]  # Use pretrained model: "hey jarvis", "alexa", "hey mycroft", "hey rhasspy"
+HOTWORD_MODEL_PATHS = []  # Optional: paths to custom .tflite/.onnx models for exact "wyzer" matching
+HOTWORD_THRESHOLD = 0.80  # Detection confidence threshold (0.0-1.0, higher = fewer false positives)
+HOTWORD_DEBOUNCE_FRAMES = 4  # Consecutive frames above threshold required to trigger
+HOTWORD_COOLDOWN_S = 3.0  # Cooldown period after confirmed wake (prevents repeated triggers)
+HOTWORD_CONFIRM_WHISPER = True  # Use Whisper to confirm KWS triggers (two-stage activation)
+HOTWORD_CONFIRM_TIMEOUT_S = 2.5  # Max time to collect audio for Whisper confirmation
+HOTWORD_CONFIRM_FAIL_OPEN = True  # If Whisper unavailable/empty, accept wake (KWS-only mode)
+HOTWORD_CONFIRM_PHRASES = ["hey jarvis", "jarvis", "hey wyzer", "wyzer"]  # Phrases to match in confirmation
+HOTWORD_RECENT_WINDOW_S = 8.0  # Window for tracking recent wake confirmations (blocks voice typing)
+
+# VAD (Voice Activity Detection) gating for hotword detection
+VAD_ENABLED = True  # Enable VAD to gate hotword scoring (reduces false positives)
+VAD_AGGRESSIVENESS = 2  # VAD sensitivity: 0 (least aggressive) to 3 (most aggressive)
+
+# Adaptive noise gate settings
+NOISE_GATE_ENABLED = True  # Enable adaptive noise gate
+NOISE_GATE_RMS_MIN = 0.0015  # Minimum RMS threshold (float audio in range [-1, 1])
+NOISE_GATE_MULTIPLIER = 2.5  # Multiplier for adaptive noise floor (gate = max(min, floor * multiplier))
+
+# Debug logging
+DEBUG_HOTWORD_AUDIO = False  # Enable detailed audio/wake score logging (toggle with Ctrl+Shift+Space)
 
 # ---------------------------------------------------------------------------
 # TTS fine-tuning (Coqui preferred with pyttsx3 fallback)

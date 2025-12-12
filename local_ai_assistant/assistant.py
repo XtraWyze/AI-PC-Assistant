@@ -23,6 +23,15 @@ from modules import (
     tts_engine,
     voice_typing,
 )
+
+# Import new hotword detection system
+try:
+    from modules import hotword_detector_new
+    _NEW_HOTWORD_AVAILABLE = True
+except ImportError:
+    _NEW_HOTWORD_AVAILABLE = False
+    hotword_detector_new = None  # type: ignore
+
 from utils.logger import log
 
 
@@ -39,6 +48,10 @@ _interrupt_key = config.INTERRUPT_KEY if hasattr(config, 'INTERRUPT_KEY') else '
 _voice_listener_running = False
 _voice_listener_thread: Optional[threading.Thread] = None
 _voice_listener_stop_event: Optional[threading.Event] = None
+
+# Diagnostic mode toggle (Ctrl+Shift+Space)
+_diagnostic_mode_enabled = False
+_diagnostic_hotkeys_pressed: set[str] = set()
 
 _HOTKEY_TOKEN_ALIASES: Dict[str, str] = {
     "control": "ctrl",
@@ -231,12 +244,23 @@ def _await_wake_signal() -> Optional[str]:
 
     if hotword_enabled:
         def _hotword_worker() -> None:
-            detected = hotword_detector.listen_for_hotword(
-                config_module=config,
-                logger=log,
-                timeout_seconds=timeout,
-                stop_event=stop_event,
-            )
+            # Use new openWakeWord engine if enabled
+            engine_type = getattr(config, "HOTWORD_ENGINE", "openwakeword").lower()
+            if engine_type == "openwakeword" and _NEW_HOTWORD_AVAILABLE:
+                detected = hotword_detector_new.listen_for_hotword_new(
+                    config_module=config,
+                    logger=log,
+                    timeout_seconds=timeout,
+                    stop_event=stop_event,
+                )
+            else:
+                # Fall back to legacy Whisper-based detection
+                detected = hotword_detector.listen_for_hotword(
+                    config_module=config,
+                    logger=log,
+                    timeout_seconds=timeout,
+                    stop_event=stop_event,
+                )
             if detected:
                 _set_winner("hotword")
 
@@ -351,8 +375,24 @@ def _stop_voice_interrupt_listener() -> None:
 
 
 def _on_key_press(key):
-    """Handle key press events for interrupt."""
+    """Handle key press events for interrupt and diagnostic mode toggle."""
+    global _diagnostic_mode_enabled, _diagnostic_hotkeys_pressed
+    
     try:
+        # Track modifier keys for Ctrl+Shift+Space diagnostic toggle
+        key_token = _key_to_hotkey_token(key)
+        if key_token:
+            _diagnostic_hotkeys_pressed.add(key_token)
+            
+            # Check for Ctrl+Shift+Space combination
+            if {"ctrl", "shift", "space"}.issubset(_diagnostic_hotkeys_pressed):
+                _diagnostic_mode_enabled = not _diagnostic_mode_enabled
+                config.DEBUG_HOTWORD_AUDIO = _diagnostic_mode_enabled
+                status = "ENABLED" if _diagnostic_mode_enabled else "DISABLED"
+                log(f"{Fore.YELLOW}[DIAGNOSTIC MODE {status}]{Style.RESET_ALL}")
+                _diagnostic_hotkeys_pressed.clear()
+                return
+        
         # Check for ESC key or configured interrupt key
         if key == keyboard.Key.esc:
             _interrupt_requested.set()
@@ -360,6 +400,17 @@ def _on_key_press(key):
         # Check for specific character keys
         if hasattr(key, 'char') and key.char and key.char.lower() == _interrupt_key.lower():
             _interrupt_requested.set()
+    except AttributeError:
+        pass
+
+
+def _on_key_release(key):
+    """Handle key release events."""
+    global _diagnostic_hotkeys_pressed
+    try:
+        key_token = _key_to_hotkey_token(key)
+        if key_token and key_token in _diagnostic_hotkeys_pressed:
+            _diagnostic_hotkeys_pressed.discard(key_token)
     except AttributeError:
         pass
 
@@ -448,10 +499,13 @@ def _capture_voice_input() -> str:
         _speak_text("I'm listening.")
 
     log("Listening for your query...")
-    text = stt_vosk.listen_once(timeout_seconds=config.MAX_LISTEN_SECONDS)
+    text = stt_vosk.listen_once(timeout_seconds=config.MAX_LISTEN_SECONDS, mode="query")
     if text:
         log(f"Heard: {text}")
-        if voice_typing.process_transcript(text):
+        # Check if voice typing should be blocked due to recent wake confirmation
+        if _NEW_HOTWORD_AVAILABLE and hotword_detector_new.should_skip_voice_typing(config, log):
+            log("Voice typing blocked: assistant recently confirmed wake or processing query.")
+        elif voice_typing.process_transcript(text):
             log("Voice typing handled the transcript locally; skipping assistant pipeline.")
             return ""
     else:
@@ -820,7 +874,7 @@ def _listen_for_follow_up_query() -> str:
 
     try:
         log(f"Listening up to {window:.1f}s for a quick follow-up...")
-        heard = stt_vosk.listen_follow_up(window, getattr(config, "MAX_LISTEN_SECONDS", 10.0))
+        heard = stt_vosk.listen_follow_up(window, getattr(config, "MAX_LISTEN_SECONDS", 10.0), mode="followup")
     except Exception as exc:
         log(f"Follow-up listener error: {exc}")
         return ""
@@ -828,9 +882,15 @@ def _listen_for_follow_up_query() -> str:
     text = heard.strip()
     if text:
         log(f"Follow-up heard: {text}")
-        if voice_typing.process_transcript(text):
+        # Check if voice typing should be blocked due to recent wake confirmation
+        if _NEW_HOTWORD_AVAILABLE and hotword_detector_new.should_skip_voice_typing(config, log):
+            log("Voice typing blocked: assistant recently confirmed wake or processing query.")
+        elif voice_typing.process_transcript(text):
             log("Voice typing handled the follow-up locally; skipping assistant pipeline.")
             return ""
+    else:
+        # Empty string means no speech detected or spam filtered - continue gracefully
+        log("No follow-up speech detected (timeout or spam filtered).")
     return text
 
 
@@ -960,8 +1020,8 @@ def main() -> None:
     conversation_state = _hydrate_saved_conversation(orchestrator)
     pending_follow_up: Optional[str] = None
     
-    # Start keyboard listener for interrupts
-    listener = keyboard.Listener(on_press=_on_key_press)
+    # Start keyboard listener for interrupts and diagnostic mode toggle
+    listener = keyboard.Listener(on_press=_on_key_press, on_release=_on_key_release)
     listener.start()
 
     while True:
